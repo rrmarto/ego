@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from ego.config import AppPaths
+from ego.events import DeliberationEvent, DeliberationEventStream, DeliberationEventType
 from ego.models import (
     DecisionState,
     FinalDecision,
     JsonObject,
     ParticipantAvailability,
     ParticipantTurnResult,
+    Phase,
     RunStatus,
 )
 from ego.redaction import redact_sensitive_text
@@ -28,8 +30,14 @@ def utc_now() -> str:
 
 
 class Database:
-    def __init__(self, paths: AppPaths) -> None:
+    def __init__(
+        self,
+        paths: AppPaths,
+        *,
+        event_stream: DeliberationEventStream | None = None,
+    ) -> None:
         self.paths = paths
+        self.event_stream = event_stream
         paths.ensure()
         self._migrate()
 
@@ -154,33 +162,66 @@ class Database:
                     now,
                 ),
             )
-            self._event(connection, run_id, "run_created", {"command": command})
+            event = self._event(
+                connection,
+                run_id,
+                DeliberationEventType.RUN_CREATED,
+                {"command": command, "workspace": str(workspace)},
+            )
+        self._publish(event)
         return run_id
 
     @staticmethod
     def _event(
         connection: sqlite3.Connection,
         run_id: str,
-        event_type: str,
+        event_type: DeliberationEventType,
         payload: JsonObject,
         participant_id: str | None = None,
-    ) -> None:
-        connection.execute(
+    ) -> DeliberationEvent:
+        created_at = datetime.now(UTC)
+        cursor = connection.execute(
             """INSERT INTO events
             (run_id, event_type, participant_id, payload_json, created_at)
             VALUES (?, ?, ?, ?, ?)""",
-            (run_id, event_type, participant_id, json.dumps(payload), utc_now()),
+            (
+                run_id,
+                event_type.value,
+                participant_id,
+                json.dumps(payload),
+                created_at.isoformat(),
+            ),
         )
+        event_id = cursor.lastrowid
+        if event_id is None:
+            raise RuntimeError("SQLite did not assign an event id")
+        phase_value = payload.get("phase")
+        phase = Phase(str(phase_value)) if phase_value is not None else None
+        return DeliberationEvent(
+            event_id=event_id,
+            run_id=run_id,
+            event_type=event_type,
+            participant_id=participant_id,
+            phase=phase,
+            payload=payload,
+            created_at=created_at,
+        )
+
+    def _publish(self, event: DeliberationEvent) -> None:
+        if self.event_stream is not None:
+            self.event_stream.publish(event)
 
     def add_event(
         self,
         run_id: str,
-        event_type: str,
+        event_type: DeliberationEventType,
         payload: JsonObject,
         participant_id: str | None = None,
-    ) -> None:
+    ) -> DeliberationEvent:
         with self.connect() as connection:
-            self._event(connection, run_id, event_type, payload, participant_id)
+            event = self._event(connection, run_id, event_type, payload, participant_id)
+        self._publish(event)
+        return event
 
     def add_participant(self, run_id: str, availability: ParticipantAvailability) -> None:
         with self.connect() as connection:
@@ -222,7 +263,13 @@ class Database:
                     run_id,
                 ),
             )
-            self._event(connection, run_id, "run_status_changed", {"status": status.value})
+            event = self._event(
+                connection,
+                run_id,
+                DeliberationEventType.RUN_STATUS_CHANGED,
+                {"status": status.value},
+            )
+        self._publish(event)
 
     def record_call(
         self,
@@ -260,13 +307,21 @@ class Database:
                     utc_now(),
                 ),
             )
-            self._event(
+            event = self._event(
                 connection,
                 run_id,
-                "participant_turn_completed" if result else "participant_turn_failed",
-                {"phase": phase, "error": error},
+                DeliberationEventType.PARTICIPANT_TURN_COMPLETED
+                if result
+                else DeliberationEventType.PARTICIPANT_TURN_FAILED,
+                {
+                    "phase": phase,
+                    "duration_seconds": result.duration_seconds if result else None,
+                    "model": result.model if result else None,
+                    "error": redact_sensitive_text(error) if error else None,
+                },
                 participant_id,
             )
+        self._publish(event)
 
     def create_decision(self, final: FinalDecision, *, supersedes_id: str | None = None) -> str:
         decision_id = str(uuid.uuid4())
@@ -283,6 +338,13 @@ class Database:
                 VALUES (?, 'recommended', NULL, ?)""",
                 (decision_id, now),
             )
+            event = self._event(
+                connection,
+                final.run_id,
+                DeliberationEventType.DECISION_CREATED,
+                {"decision_id": decision_id, "state": "recommended"},
+            )
+        self._publish(event)
         return decision_id
 
     def transition_decision(self, decision_id: str, state: DecisionState, note: str | None) -> None:
@@ -340,6 +402,33 @@ class Database:
         result["events"] = [dict(row) for row in events]
         result["calls"] = [dict(row) for row in calls]
         return result
+
+    def get_run_events(self, run_id: str, *, after_event_id: int = 0) -> list[DeliberationEvent]:
+        with self.connect() as connection:
+            run = connection.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                raise KeyError(run_id)
+            rows = connection.execute(
+                """SELECT id, run_id, event_type, participant_id, payload_json, created_at
+                FROM events WHERE run_id = ? AND id > ? ORDER BY id""",
+                (run_id, after_event_id),
+            ).fetchall()
+        events: list[DeliberationEvent] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            phase_value = payload.get("phase")
+            events.append(
+                DeliberationEvent(
+                    event_id=row["id"],
+                    run_id=row["run_id"],
+                    event_type=row["event_type"],
+                    participant_id=row["participant_id"],
+                    phase=Phase(str(phase_value)) if phase_value is not None else None,
+                    payload=payload,
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+            )
+        return events
 
     def list_decisions(self) -> list[dict[str, Any]]:
         with self.connect() as connection:

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ego.events import DeliberationEventType
 from ego.models import Confidence, FinalDecision, RunStatus
 from ego.storage import Database
 
@@ -47,3 +48,17 @@ def test_accepting_reconsideration_supersedes_previous(database: Database, tmp_p
     assert database.get_decision(first_id)["state"] == "recommended"
     database.transition_decision(second_id, "accepted", None)
     assert database.get_decision(first_id)["state"] == "superseded"
+
+
+def test_run_events_can_be_read_incrementally(database: Database, tmp_path: Path) -> None:
+    run_id = make_run(database, tmp_path)
+    initial = database.get_run_events(run_id)
+    database.set_run_status(run_id, RunStatus.RUNNING)
+
+    recent = database.get_run_events(run_id, after_event_id=initial[-1].event_id)
+
+    assert [item.event_type for item in initial] == [DeliberationEventType.RUN_CREATED]
+    assert [item.event_type for item in recent] == [
+        DeliberationEventType.RUN_STATUS_CHANGED
+    ]
+    assert recent[0].payload["status"] == RunStatus.RUNNING.value

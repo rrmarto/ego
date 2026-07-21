@@ -12,6 +12,7 @@ place and must remain read-only.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.
 - `deliberation`: phase barriers, failure handling, synthesis, reconciliation.
+- `events`: typed, real-time observation of committed deliberation events.
 - `storage`: SQLite migrations, append-only events, raw-output retention.
 
 The harness depends on the `Participant` protocol, not provider classes. HTTP
@@ -45,3 +46,8 @@ SQLite stores runs, participants, calls, events, decisions, and decision events.
 Raw responses are files referenced by calls and expire after 30 days. Records
 are append-only except for derived run and decision status columns, which are
 updated in the same transaction as their corresponding event.
+
+Each persisted deliberation event may also be published to an optional in-process
+async queue. Persistence always commits before publication. The queue is a live
+delivery mechanism for interfaces; SQLite remains the auditable source of truth
+and can replay events incrementally by event identifier.

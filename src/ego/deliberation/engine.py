@@ -17,10 +17,12 @@ from ego.deliberation.finalization import (
     validate_position,
     validate_synthesis,
 )
+from ego.events import DeliberationEventType
 from ego.models import (
     AvailabilityStatus,
     Confidence,
     FinalDecision,
+    ParticipantAvailability,
     ParticipantTurnResult,
     PeerReviewBundle,
     Phase,
@@ -30,6 +32,7 @@ from ego.models import (
     TurnRequest,
 )
 from ego.participants import Participant, ParticipantError
+from ego.redaction import redact_sensitive_text
 from ego.storage import Database
 from ego.workspace import observe_git
 
@@ -71,9 +74,9 @@ class DeliberationEngine:
         self.database.set_run_status(run_id, RunStatus.RUNNING)
         try:
             selected = {name: self.participants[name] for name in participant_ids}
-            availability = await asyncio.gather(*(item.probe() for item in selected.values()))
-            for item in availability:
-                self.database.add_participant(run_id, item)
+            availability = await asyncio.gather(
+                *(self._probe_participant(run_id, item) for item in selected.values())
+            )
             active = {
                 item.participant_id: selected[item.participant_id]
                 for item in availability
@@ -142,6 +145,12 @@ class DeliberationEngine:
     async def _invoke(
         self, run_id: str, participant: Participant, request: TurnRequest
     ) -> ParticipantTurnResult | None:
+        self.database.add_event(
+            run_id,
+            DeliberationEventType.PARTICIPANT_TURN_STARTED,
+            {"phase": request.phase.value},
+            participant.participant_id,
+        )
         try:
             result = await participant.respond(request)
             self.database.record_call(
@@ -161,13 +170,55 @@ class DeliberationEngine:
             )
             return None
 
+    async def _probe_participant(
+        self, run_id: str, participant: Participant
+    ) -> ParticipantAvailability:
+        self.database.add_event(
+            run_id,
+            DeliberationEventType.PARTICIPANT_PROBE_STARTED,
+            {},
+            participant.participant_id,
+        )
+        try:
+            availability = await participant.probe()
+        except Exception as error:
+            self.database.add_event(
+                run_id,
+                DeliberationEventType.PARTICIPANT_PROBE_COMPLETED,
+                {
+                    "status": AvailabilityStatus.UNKNOWN.value,
+                    "error": redact_sensitive_text(str(error)),
+                },
+                participant.participant_id,
+            )
+            raise
+        self.database.add_participant(run_id, availability)
+        self.database.add_event(
+            run_id,
+            DeliberationEventType.PARTICIPANT_PROBE_COMPLETED,
+            {
+                "status": availability.status.value,
+                "version": availability.version,
+                "model": availability.model,
+                "authentication": availability.authentication,
+                "reason": availability.reason,
+            },
+            participant.participant_id,
+        )
+        return availability
+
     async def _parallel(
         self,
         run_id: str,
         phase: Phase,
         requests: dict[str, tuple[Participant, TurnRequest]],
     ) -> dict[str, ParticipantTurnResult]:
-        self.database.add_event(run_id, "phase_started", {"phase": phase.value})
+        expected = sorted(requests)
+        self.database.add_event(
+            run_id,
+            DeliberationEventType.PHASE_STARTED,
+            {"phase": phase.value, "expected": expected, "total": len(expected)},
+        )
         tasks: dict[str, asyncio.Task[ParticipantTurnResult | None]] = {}
         async with asyncio.TaskGroup() as group:
             for name, (participant, request) in requests.items():
@@ -177,8 +228,13 @@ class DeliberationEngine:
         }
         self.database.add_event(
             run_id,
-            "phase_completed",
-            {"phase": phase.value, "successful": sorted(results)},
+            DeliberationEventType.PHASE_COMPLETED,
+            {
+                "phase": phase.value,
+                "successful": sorted(results),
+                "failed": sorted(set(expected) - set(results)),
+                "total": len(expected),
+            },
         )
         return results
 
