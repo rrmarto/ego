@@ -4,7 +4,13 @@ from ego.participants.base import CliParticipant
 class CodexParticipant(CliParticipant):
     participant_id = "codex"
     default_binary = "codex"
-    required_help_tokens = ("--sandbox", "--ephemeral", "--output-schema", "--ignore-user-config")
+    required_help_tokens = (
+        "--config",
+        "--sandbox",
+        "--ephemeral",
+        "--output-schema",
+        "--ignore-user-config",
+    )
 
     def help_command(self, binary: str) -> list[str]:
         return [binary, "exec", "--help"]
@@ -16,6 +22,8 @@ class CodexParticipant(CliParticipant):
         command = [
             binary,
             "exec",
+            "--config",
+            'model_reasoning_effort="medium"',
             "--disable",
             "apps",
             "--disable",

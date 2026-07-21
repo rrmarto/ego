@@ -13,6 +13,7 @@ def test_codex_command_enforces_native_read_only_flags() -> None:
     assert "--ephemeral" in command
     assert "--ignore-user-config" in command
     assert "--ignore-rules" in command
+    assert command[command.index("--config") + 1] == 'model_reasoning_effort="medium"'
     disabled = [command[index + 1] for index, value in enumerate(command) if value == "--disable"]
     assert {"apps", "browser_use", "computer_use", "multi_agent"} <= set(disabled)
     assert command[-1] == "-"
@@ -39,6 +40,30 @@ def test_response_models_are_phase_specific() -> None:
 
     assert response_model(Phase.INDEPENDENT) is Position
     assert response_model(Phase.REVISION) is Position
+
+
+def test_response_schemas_are_strict_for_every_phase() -> None:
+    from ego.prompts import response_schema
+
+    for phase in Phase:
+        _assert_strict_objects(response_schema(phase))
+
+
+def _assert_strict_objects(value: object) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _assert_strict_objects(item)
+        return
+    if not isinstance(value, dict):
+        return
+
+    assert "default" not in value
+    properties = value.get("properties")
+    if value.get("type") == "object" and isinstance(properties, dict):
+        assert value.get("additionalProperties") is False
+        assert value.get("required") == list(properties)
+    for item in value.values():
+        _assert_strict_objects(item)
 
 
 async def test_missing_binary_is_reported_generically() -> None:

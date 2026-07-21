@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -15,14 +16,30 @@ def response_model(phase: Phase) -> type[BaseModel]:
     return Synthesis
 
 
-def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
-    schemas: dict[Phase, type[BaseModel]] = {
-        Phase.INDEPENDENT: Position,
-        Phase.PEER_REVIEW: PeerReviewBundle,
-        Phase.REVISION: Position,
-        Phase.SYNTHESIS: Synthesis,
-        Phase.RECONCILIATION: Synthesis,
+def response_schema(phase: Phase) -> dict[str, object]:
+    schema = response_model(phase).model_json_schema()
+    return cast(dict[str, object], _strict_schema(schema))
+
+
+def _strict_schema(value: object) -> object:
+    if isinstance(value, list):
+        return [_strict_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized = {
+        key: _strict_schema(item)
+        for key, item in value.items()
+        if key != "default"
     }
+    properties = normalized.get("properties")
+    if normalized.get("type") == "object" and isinstance(properties, dict):
+        normalized["additionalProperties"] = False
+        normalized["required"] = list(properties)
+    return normalized
+
+
+def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
     instructions = {
         Phase.INDEPENDENT: (
             "Analyze independently. Inspect relevant files before making repository claims. "
@@ -47,7 +64,7 @@ def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
     }
     context = request.model_dump(mode="json", exclude_none=True)
     context["workspace"] = str(request.workspace)
-    schema = schemas[request.phase].model_json_schema()
+    schema = response_schema(request.phase)
     correction_text = f"\nPrevious response validation error: {correction}\n" if correction else ""
     return f"""You are a peer in Ego, a decision-only deliberation engine.
 You have equal authority with every other participant. You may read and search the workspace, but

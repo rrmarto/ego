@@ -20,7 +20,7 @@ from ego.models import (
     Synthesis,
     TurnRequest,
 )
-from ego.prompts import build_prompt, response_model
+from ego.prompts import build_prompt, response_model, response_schema
 from ego.runner import ProcessFailure, run_read_only
 from ego.sandbox import SandboxProbe, probe_seatbelt
 
@@ -214,7 +214,7 @@ class CliParticipant(ABC):
         if availability.status is not AvailabilityStatus.AVAILABLE or not availability.binary:
             raise ParticipantError(availability.reason or f"{self.participant_id} is unavailable")
         model_type = response_model(request.phase)
-        schema = cast(dict[str, object], model_type.model_json_schema())
+        schema = response_schema(request.phase)
         errors: str | None = None
         raw_outputs: list[str] = []
         duration = 0.0
