@@ -298,43 +298,46 @@ Screen {
 }
 
 #resolution-actions .action-accept {
-    background: $ego-green;
+    background: $ego-background;
     border: solid $ego-green;
-    color: $ego-background;
+    color: $ego-green;
     text-style: bold;
 }
 
 #resolution-actions .action-accept:focus {
-    background: #68e788;
+    background: $ego-background;
     border: solid $ego-yellow;
-    color: $ego-background;
+    color: $ego-green;
 }
 
 #resolution-actions .action-reject {
-    background: #c94f5d;
+    background: $ego-background;
     border: solid #c94f5d;
-    color: white;
+    color: #c94f5d;
     text-style: bold;
 }
 
 #resolution-actions .action-reject:focus {
-    background: #e06a76;
+    background: $ego-background;
     border: solid $ego-yellow;
-    color: white;
+    color: #c94f5d;
 }
 
 #resolution-actions .action-defer {
-    height: 3;
-    background: #367db7;
+    background: $ego-background;
     border: solid #367db7;
-    color: white;
+    color: #5198cf;
     text-style: bold;
 }
 
 #resolution-actions .action-defer:focus {
-    background: #5198cf;
+    background: $ego-background;
     border: solid $ego-yellow;
-    color: white;
+    color: #5198cf;
+}
+
+.console-only #task-card {
+    display: none;
 }
 
 .decision-ready #task-card {
@@ -386,8 +389,36 @@ Screen {
 #bottom-bar {
     dock: bottom;
     width: 100%;
-    height: 6;
+    height: auto;
+    min-height: 6;
+    max-height: 17;
     align-horizontal: center;
+}
+
+.command-palette {
+    display: none;
+    width: 100%;
+    max-width: 110;
+    height: auto;
+    max-height: 11;
+    padding: 0 1;
+    background: $ego-background;
+    border: solid $ego-purple;
+    color: #bbc4d5;
+}
+
+.command-palette:focus {
+    background: $ego-background;
+    border: solid $ego-yellow;
+}
+
+.command-palette > .option-list--option-highlighted {
+    background: $ego-surface;
+    color: white;
+}
+
+#welcome-command-palette {
+    margin: 0 2;
 }
 
 .question-input {
@@ -405,9 +436,16 @@ Screen {
 
 #active-bottom-bar {
     width: 100%;
-    height: 6;
+    height: auto;
+    min-height: 6;
+    max-height: 17;
     padding-top: 1;
     align-horizontal: left;
+}
+
+#active-command-palette {
+    max-width: 100%;
+    margin: 0;
 }
 
 #active-question-input {

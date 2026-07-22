@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from contextlib import suppress
 from pathlib import Path
 from time import monotonic
@@ -9,8 +10,8 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.events import Resize
-from textual.widgets import Button, Markdown, ProgressBar, Static
+from textual.events import Resize, TextSelected
+from textual.widgets import Button, Markdown, OptionList, ProgressBar, Static
 from textual.worker import Worker
 
 from ego import __version__
@@ -20,7 +21,17 @@ from ego.events import DeliberationEvent, DeliberationEventStream, DeliberationE
 from ego.models import FinalDecision, Phase, Position, Synthesis
 from ego.participants import Participant, build_participants
 from ego.storage import Database
-from ego.tui.input import QuestionInput
+from ego.tui.clipboard import copy_to_macos_clipboard
+from ego.tui.commands import (
+    COMMAND_BY_NAME,
+    decision_text,
+    decisions_text,
+    help_text,
+    participant_checks_text,
+    run_text,
+    runs_text,
+)
+from ego.tui.input import CommandPalette, QuestionInput
 from ego.tui.presentation import (
     final_markdown,
     participant_texts,
@@ -41,7 +52,7 @@ class EgoApp(App[None]):
     CSS_PATH = "ego.tcss"
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
-        Binding("ctrl+c", "cancel_run", "Cancel run", show=True),
+        Binding("ctrl+c", "copy_or_cancel", "Copy / Cancel run", show=True),
         Binding("ctrl+l", "focus_question", "Question", show=True),
     ]
 
@@ -94,17 +105,23 @@ class EgoApp(App[None]):
     def on_resize(self, event: Resize) -> None:
         self._set_responsive_class(event.size.width)
 
+    @on(TextSelected)
+    def copy_completed_output_selection(self, event: TextSelected) -> None:
+        selected_output = self.screen.get_selected_text()
+        if selected_output:
+            self.copy_to_clipboard(selected_output)
+
     def _set_responsive_class(self, width: int) -> None:
         self.screen.set_class(width < 96, "narrow")
 
     @work(exclusive=True, group="probe")
-    async def probe_participants(self) -> None:
+    async def probe_participants(self, *, report: bool = False) -> None:
         results = await asyncio.gather(
             *(participant.probe() for participant in self.participants.values()),
             return_exceptions=True,
         )
         for name, result in zip(self.participants, results, strict=True):
-            state = self.session.participants[name]
+            state = self.session.participants.setdefault(name, self._pending_participant())
             if isinstance(result, BaseException):
                 state.status = "unknown"
                 state.detail = str(result)
@@ -112,58 +129,302 @@ class EgoApp(App[None]):
                 state.status = result.status.value
                 state.detail = result.reason or result.version or result.status.value
         self._render_state()
+        if report:
+            self._write_timeline(
+                participant_checks_text(list(self.participants), results),
+                style="white",
+            )
 
     @on(QuestionInput.Submitted)
     def submit_question(self, event: QuestionInput.Submitted) -> None:
-        question = event.question_input.text.strip()
+        raw = event.question_input.text
         event.question_input.clear()
-        if not question:
+        if not raw.strip():
             return
-        if question.startswith("/"):
-            self._handle_command(question)
+        if raw.startswith("/"):
+            self._handle_command(raw.strip())
             return
+        question = raw.strip()
         if self.running:
             self._write_timeline("A deliberation is already running.", style="yellow")
             return
-        self.active_worker = self.deliberate(question)
+        self._start_deliberation(question)
+
+    @on(QuestionInput.Changed, ".question-input")
+    def update_command_suggestions(self, event: QuestionInput.Changed) -> None:
+        question_input = event.text_area
+        if not isinstance(question_input, QuestionInput):
+            return
+        self._command_palette_for(question_input).show_matches(question_input.text)
+
+    @on(QuestionInput.NavigateCommands)
+    def navigate_command_suggestions(self, event: QuestionInput.NavigateCommands) -> None:
+        palette = self._command_palette_for(event.question_input)
+        if palette.display and palette.option_count:
+            palette.focus()
+
+    @on(QuestionInput.DismissCommands)
+    def dismiss_command_suggestions(self, event: QuestionInput.DismissCommands) -> None:
+        self._command_palette_for(event.question_input).display = False
+
+    @on(OptionList.OptionSelected, ".command-palette")
+    def select_command_suggestion(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id not in COMMAND_BY_NAME:
+            return
+        palette = event.option_list
+        question_input = self._question_input_for_palette(palette)
+        question_input.text = f"{event.option_id} "
+        question_input.cursor_location = (0, len(question_input.text))
+        palette.display = False
+        question_input.focus()
+
+    @on(CommandPalette.Dismissed)
+    def focus_input_after_palette(self, event: CommandPalette.Dismissed) -> None:
+        self._question_input_for_palette(event.palette).focus()
+
+    def _command_palette_for(self, question_input: QuestionInput) -> CommandPalette:
+        palette_id = (
+            "#active-command-palette"
+            if question_input.id == "active-question-input"
+            else "#welcome-command-palette"
+        )
+        return self.query_one(palette_id, CommandPalette)
+
+    def _question_input_for_palette(self, palette: OptionList) -> QuestionInput:
+        input_id = (
+            "#active-question-input"
+            if palette.id == "active-command-palette"
+            else "#question-input"
+        )
+        return self.query_one(input_id, QuestionInput)
 
     def _handle_command(self, raw: str) -> None:
-        command, _, value = raw.partition(" ")
+        try:
+            parts = shlex.split(raw)
+        except ValueError as error:
+            self._show_active_console()
+            self._write_timeline(f"Invalid command: {error}", style="yellow")
+            return
+        command = parts[0].lower()
+        arguments = parts[1:]
         if command in {"/quit", "/exit"}:
             self.exit()
-        elif command == "/doctor":
-            self.probe_participants()
-            self._write_timeline("Refreshing participant availability…", style="cyan")
-        elif command == "/mode" and value in {"standard", "discussion", "expert"}:
-            self.mode = value
-            self._write_timeline(f"Transparency mode: {value}", style="magenta")
-        elif command == "/help":
-            self._write_timeline(
-                "Commands: /choose N · /decide TEXT · /accept · /defer · /reject · "
-                "/mode standard|discussion|expert · /doctor · /quit",
-                style="cyan",
-            )
-        elif command == "/choose":
-            choice, _, note = value.partition(" ")
-            try:
-                alternative = int(choice)
-            except ValueError:
-                self._write_timeline("Use /choose followed by an option number.", style="yellow")
+            return
+        self._show_active_console()
+        if command == "/help":
+            self._write_timeline(help_text(), style="cyan")
+        elif command in {"/doctor", "/participants"}:
+            if arguments:
+                self._write_usage(command)
                 return
-            self._record_human_resolution(alternative_index=alternative, note=note or None)
+            self._write_timeline("Refreshing participant availability…", style="cyan")
+            self.probe_participants(report=True)
+        elif command == "/pwd":
+            if arguments:
+                self._write_usage(command)
+            else:
+                self._write_timeline(f"Workspace:\n  {self.workspace}", style="cyan")
+        elif command == "/cd":
+            self._change_workspace(arguments)
+        elif command == "/mode":
+            if len(arguments) != 1 or arguments[0] not in {
+                "standard",
+                "discussion",
+                "expert",
+            }:
+                self._write_usage(command)
+            else:
+                self.mode = arguments[0]
+                self._write_timeline(
+                    f"Transparency mode:\n  {self.mode}",
+                    style="magenta",
+                )
+                self._render_state()
+        elif command == "/runs":
+            if arguments:
+                self._write_usage(command)
+            else:
+                self._write_timeline(runs_text(Database(self.paths).list_runs()), style="white")
+        elif command == "/decisions":
+            if arguments:
+                self._write_usage(command)
+            else:
+                self._write_timeline(
+                    decisions_text(Database(self.paths).list_decisions()),
+                    style="white",
+                )
+        elif command == "/inspect":
+            self._inspect_run(arguments)
+        elif command == "/show":
+            self._show_decision(arguments)
+        elif command == "/reconsider":
+            self._reconsider(arguments)
+        elif command == "/ask":
+            if not arguments:
+                self._write_usage(command)
+            else:
+                self._start_deliberation(" ".join(arguments))
+        elif command == "/summon":
+            self._summon(arguments)
+        elif command == "/choose":
+            if not arguments:
+                self._write_usage(command)
+                return
+            try:
+                alternative = int(arguments[0])
+            except ValueError:
+                self._write_usage(command)
+                return
+            self._record_human_resolution(
+                alternative_index=alternative,
+                note=" ".join(arguments[1:]) or None,
+            )
         elif command == "/decide":
-            self._record_human_resolution(custom_text=value)
+            if not arguments:
+                self._write_usage(command)
+            else:
+                self._record_human_resolution(custom_text=" ".join(arguments))
         elif command in {"/accept", "/defer", "/reject"}:
             state = {"/accept": "accepted", "/defer": "deferred", "/reject": "rejected"}[
                 command
             ]
-            self._transition_current_decision(state, value or None)
+            self._transition_current_decision(state, " ".join(arguments) or None)
         else:
-            self._write_timeline(f"Unknown command: {raw}", style="yellow")
+            self._write_timeline(f"Unknown command: {command}. Use /help.", style="yellow")
+
+    def _start_deliberation(
+        self,
+        question: str,
+        *,
+        selected: list[str] | None = None,
+        command: str = "ask",
+        workspace: Path | None = None,
+        parent_decision_id: str | None = None,
+    ) -> None:
+        if self.running:
+            self._write_timeline("A deliberation is already running.", style="yellow")
+            return
+        self.active_worker = self.deliberate(
+            question,
+            selected=selected or list(self.participants),
+            command=command,
+            workspace=workspace or self.workspace,
+            parent_decision_id=parent_decision_id,
+        )
+
+    def _write_usage(self, command: str) -> None:
+        self._write_timeline(f"Usage:\n  {COMMAND_BY_NAME[command].usage}", style="yellow")
+
+    def _change_workspace(self, arguments: list[str]) -> None:
+        if len(arguments) != 1:
+            self._write_usage("/cd")
+            return
+        candidate = Path(arguments[0]).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.workspace / candidate
+        candidate = candidate.resolve()
+        if not candidate.is_dir():
+            self._write_timeline(f"Not a directory:\n  {candidate}", style="yellow")
+            return
+        self.workspace = candidate
+        self._write_timeline(f"Workspace:\n  {self.workspace}", style="cyan")
+
+    def _summon(self, arguments: list[str]) -> None:
+        if "--" not in arguments:
+            self._write_usage("/summon")
+            return
+        separator = arguments.index("--")
+        selected = arguments[:separator]
+        question = " ".join(arguments[separator + 1 :]).strip()
+        if not selected or not question:
+            self._write_usage("/summon")
+            return
+        unknown = sorted(set(selected) - set(self.participants))
+        if unknown:
+            self._write_timeline(
+                f"Unknown participant(s):\n  {', '.join(unknown)}",
+                style="yellow",
+            )
+            return
+        self._start_deliberation(question, selected=selected, command="summon")
+
+    def _inspect_run(self, arguments: list[str]) -> None:
+        if len(arguments) != 1:
+            self._write_usage("/inspect")
+            return
+        try:
+            row = Database(self.paths).get_run(arguments[0])
+        except KeyError:
+            self._write_timeline(f"Unknown run:\n  {arguments[0]}", style="yellow")
+            return
+        self._write_timeline(run_text(row), style="white")
+
+    def _show_decision(self, arguments: list[str]) -> None:
+        if len(arguments) != 1:
+            self._write_usage("/show")
+            return
+        try:
+            row = Database(self.paths).get_decision(arguments[0])
+        except KeyError:
+            self._write_timeline(f"Unknown decision:\n  {arguments[0]}", style="yellow")
+            return
+        self._write_timeline(decision_text(row), style="white")
+
+    def _reconsider(self, arguments: list[str]) -> None:
+        if "--" not in arguments or arguments.index("--") != 1:
+            self._write_usage("/reconsider")
+            return
+        decision_id = arguments[0]
+        new_context = " ".join(arguments[2:]).strip()
+        if not new_context:
+            self._write_usage("/reconsider")
+            return
+        database = Database(self.paths)
+        try:
+            decision = database.get_decision(decision_id)
+            previous_run = database.get_run(decision["run_id"])
+            workspace = resolve_workspace(Path(previous_run["workspace"]))
+        except KeyError:
+            self._write_timeline(f"Unknown decision:\n  {decision_id}", style="yellow")
+            return
+        except (OSError, ValueError) as error:
+            self._write_timeline(f"Previous workspace is unavailable:\n  {error}", style="yellow")
+            return
+        question = (
+            f"Original question: {previous_run['question']}\n"
+            f"Previous recommendation: {decision['record']['recommendation']}\n"
+            f"New context: {new_context}"
+        )
+        self._start_deliberation(
+            question,
+            command="reconsider",
+            workspace=workspace,
+            parent_decision_id=decision_id,
+        )
+
+    def _show_active_console(self) -> None:
+        if self.active_view:
+            return
+        self.active_view = True
+        self.screen.add_class("console-only")
+        self.query_one("#welcome-view", WelcomeView).display = False
+        self.query_one("#bottom-bar", WelcomeQuestionBar).display = False
+        self.query_one("#active-view", ActiveView).display = True
+        self.query_one("#active-question-input", QuestionInput).disabled = False
+        self.call_after_refresh(self.action_focus_question)
+        self._render_state()
 
     @work(exclusive=True, group="deliberation", exit_on_error=False)
-    async def deliberate(self, question: str) -> None:
-        self._begin_run(question)
+    async def deliberate(
+        self,
+        question: str,
+        *,
+        selected: list[str],
+        command: str,
+        workspace: Path,
+        parent_decision_id: str | None,
+    ) -> None:
+        self._begin_run(question, selected)
         stream = DeliberationEventStream()
         consumer: asyncio.Task[None] | None = None
         task: asyncio.Task[DeliberationOutcome] | None = None
@@ -175,9 +436,10 @@ class EgoApp(App[None]):
             task = asyncio.create_task(
                 engine.deliberate(
                     question=question,
-                    workspace=self.workspace,
-                    participant_ids=list(self.participants),
-                    command="ask",
+                    workspace=workspace,
+                    participant_ids=selected,
+                    command=command,
+                    parent_decision_id=parent_decision_id,
                 )
             )
             outcome = await task
@@ -233,13 +495,13 @@ class EgoApp(App[None]):
             ) in {"failed", "interrupted"}:
                 return
 
-    def _begin_run(self, question: str) -> None:
+    def _begin_run(self, question: str, selected: list[str]) -> None:
         self.running = True
         self.started_at = monotonic()
         self.elapsed_seconds = 0
         self.turn_started_at.clear()
-        self.session.reset(list(self.participants))
-        self.screen.remove_class("decision-ready", "decision-resolved")
+        self.session.reset(selected)
+        self.screen.remove_class("console-only", "decision-ready", "decision-resolved")
         self.current_decision_id = None
         self.current_final = None
         self.active_view = True
@@ -452,6 +714,32 @@ class EgoApp(App[None]):
             self.active_worker.cancel()
         else:
             self._write_timeline("No active deliberation.", style="dim")
+
+    def action_copy_or_cancel(self) -> None:
+        selected_output = self.screen.get_selected_text()
+        if selected_output is not None:
+            self.copy_to_clipboard(selected_output)
+            return
+        focused = self.focused
+        if isinstance(focused, QuestionInput) and focused.selected_text:
+            self.copy_to_clipboard(focused.selected_text)
+            return
+        self.action_cancel_run()
+
+    def copy_to_clipboard(self, text: str) -> None:
+        super().copy_to_clipboard(text)
+        macos_result = copy_to_macos_clipboard(text)
+        if macos_result is True:
+            preview = " ".join(text.split())
+            if len(preview) > 52:
+                preview = f"{preview[:49]}..."
+            self.notify(f"Copied: {preview}", timeout=2)
+        elif macos_result is False:
+            self.notify(
+                "Could not access the system clipboard. Use Shift-drag and Cmd+C in Warp.",
+                severity="warning",
+                timeout=4,
+            )
 
     def action_focus_question(self) -> None:
         input_id = "#active-question-input" if self.active_view else "#question-input"

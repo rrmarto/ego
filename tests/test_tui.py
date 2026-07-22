@@ -28,6 +28,7 @@ from ego.models import (
 )
 from ego.storage import Database
 from ego.tui.app import EgoApp, QuestionInput
+from ego.tui.input import CommandPalette
 from ego.tui.state import SessionState
 from ego.tui.timeline import DeliberationTimeline
 
@@ -243,11 +244,14 @@ async def test_tui_runs_a_question_and_renders_the_decision(
         defer_button = app.query_one("#defer-final", Button)
         reject_button = app.query_one("#reject-final", Button)
         assert accept_button.has_class("action-accept")
-        assert accept_button.styles.background == Color.parse("#42d66b")
+        assert accept_button.styles.background == Color.parse("#060a12")
         assert defer_button.has_class("action-defer")
         assert reject_button.has_class("action-reject")
-        assert reject_button.styles.background == Color.parse("#c94f5d")
-        assert defer_button.styles.background == Color.parse("#367db7")
+        assert reject_button.styles.background == Color.parse("#060a12")
+        assert defer_button.styles.background == Color.parse("#060a12")
+        assert accept_button.styles.border_top[1] == Color.parse("#42d66b")
+        assert defer_button.styles.border_top[1] == Color.parse("#367db7")
+        assert reject_button.styles.border_top[1] == Color.parse("#c94f5d")
         assert defer_button.region.height == accept_button.region.height
         assert defer_button.region.height == reject_button.region.height
         assert app.elapsed_seconds == 125
@@ -328,6 +332,201 @@ async def test_tui_runs_a_question_and_renders_the_decision(
         assert timeline.region.height >= 12
 
 
+async def test_tui_suggests_and_executes_leading_slash_commands(
+    app_paths: AppPaths,
+    tmp_path: Path,
+) -> None:
+    participant = FastParticipant()
+    app = EgoApp(
+        workspace=tmp_path,
+        paths=app_paths,
+        participants={participant.participant_id: participant},
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        question = app.query_one("#question-input", QuestionInput)
+        palette = app.query_one("#welcome-command-palette", CommandPalette)
+
+        question.text = "/"
+        await pilot.pause()
+        assert palette.display
+        assert [option.id for option in palette.options] == [
+            "/help",
+            "/ask",
+            "/summon",
+            "/cd",
+            "/pwd",
+            "/mode",
+            "/doctor",
+            "/participants",
+            "/runs",
+            "/inspect",
+            "/decisions",
+            "/show",
+            "/reconsider",
+            "/choose",
+            "/decide",
+            "/accept",
+            "/defer",
+            "/reject",
+            "/quit",
+            "/exit",
+        ]
+
+        question.text = "/mo"
+        await pilot.pause()
+        assert palette.display
+        assert [option.id for option in palette.options] == ["/mode"]
+
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert question.text == "/mode "
+        assert question.has_focus
+        assert not palette.display
+
+        question.text = "/help"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.active_view
+        assert app.screen.has_class("console-only")
+        assert not app.query_one("#welcome-view", Vertical).display
+        assert app.query_one("#active-view", Vertical).display
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+        assert "Interactive commands:\n  <question>" in timeline.transcript_text
+        assert "/runs" in timeline.transcript_text
+        assert "List previous runs" in timeline.transcript_text
+        assert "/decisions" in timeline.transcript_text
+        assert "List decision records" in timeline.transcript_text
+        active_question = app.query_one("#active-question-input", QuestionInput)
+        assert active_question.has_focus
+
+        active_question.text = "/runs"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "Runs:\n  No persisted runs." in timeline.transcript_text
+
+        active_question.text = "/decisions"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "Decisions:\n  No decision records." in timeline.transcript_text
+
+        active_question.text = "/doctor"
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while "Participant checks:" not in timeline.transcript_text:
+                await pilot.pause()
+        assert "CODEX  available (test)" in timeline.transcript_text
+
+        target = tmp_path / "project"
+        target.mkdir()
+        active_question.text = "/cd project"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert f"Workspace:\n  {target}" in timeline.transcript_text
+
+        active_question.text = "/pwd"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert timeline.transcript_text.count(f"Workspace:\n  {target}") == 2
+
+
+async def test_tui_treats_slashes_after_the_first_character_as_question_text(
+    app_paths: AppPaths,
+    tmp_path: Path,
+) -> None:
+    participant = FastParticipant()
+    app = EgoApp(
+        workspace=tmp_path,
+        paths=app_paths,
+        participants={participant.participant_id: participant},
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        question = app.query_one("#question-input", QuestionInput)
+        palette = app.query_one("#welcome-command-palette", CommandPalette)
+        question.text = "Explain the /help syntax"
+        await pilot.pause()
+        assert not palette.display
+
+        question.text = " /help"
+        await pilot.pause()
+        assert not palette.display
+
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while app.current_final is None or app.running:
+                await pilot.pause()
+
+        task_text = str(app.query_one("#task-card", Static).render())
+        assert "/help" in task_text
+        assert "Interactive commands:" not in app.query_one(
+            "#timeline", DeliberationTimeline
+        ).transcript_text
+
+
+async def test_tui_summon_runs_with_selected_participants(
+    app_paths: AppPaths,
+    tmp_path: Path,
+) -> None:
+    participant = FastParticipant()
+    app = EgoApp(
+        workspace=tmp_path,
+        paths=app_paths,
+        participants={participant.participant_id: participant},
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        question = app.query_one("#question-input", QuestionInput)
+        question.text = "/summon codex -- Keep the event boundary?"
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while app.current_final is None or app.running:
+                await pilot.pause()
+
+        assert app.session.run_id is not None
+        run = Database(app_paths).get_run(app.session.run_id)
+        assert run["command"] == "summon"
+        assert {call["participant_id"] for call in run["calls"]} == {"codex"}
+        assert app.current_decision_id is not None
+        original_decision_id = app.current_decision_id
+        active_question = app.query_one("#active-question-input", QuestionInput)
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+
+        active_question.text = "/runs"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.session.run_id in timeline.transcript_text
+
+        active_question.text = "/decisions"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert original_decision_id in timeline.transcript_text
+
+        active_question.text = f"/inspect {app.session.run_id}"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "Run details:" in timeline.transcript_text
+
+        active_question.text = f"/show {original_decision_id}"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert f"Decision: {original_decision_id}" in timeline.transcript_text
+
+        active_question.text = (
+            f"/reconsider {original_decision_id} -- New evidence changes the boundary."
+        )
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while app.current_decision_id == original_decision_id or app.running:
+                await pilot.pause()
+
+        assert app.session.run_id is not None
+        reconsidered_run = Database(app_paths).get_run(app.session.run_id)
+        assert reconsidered_run["command"] == "reconsider"
+        assert reconsidered_run["parent_decision_id"] == original_decision_id
+
+
 async def test_tui_uses_compact_layout_for_narrow_terminals(
     app_paths: AppPaths,
     tmp_path: Path,
@@ -345,6 +544,114 @@ async def test_tui_uses_compact_layout_for_narrow_terminals(
         assert app.screen.has_class("narrow")
         assert app.query_one("#welcome-view", Vertical).display
         assert not app.query_one("#side-column", Vertical).display
+
+
+async def test_ctrl_c_copies_selection_before_falling_back_to_cancel(
+    app_paths: AppPaths,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    participant = FastParticipant()
+    app = EgoApp(
+        workspace=tmp_path,
+        paths=app_paths,
+        participants={participant.participant_id: participant},
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        copied_to_system: list[str] = []
+        monkeypatch.setattr(
+            "ego.tui.app.copy_to_macos_clipboard",
+            lambda text: copied_to_system.append(text) or True,
+        )
+
+        question = app.query_one("#question-input", QuestionInput)
+        question.text = "/help"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+        help_message = list(timeline.query(".timeline-message"))[-1]
+        assert await pilot.mouse_down(help_message, offset=(0, 0))
+        assert await pilot.hover(help_message, offset=(15, 0))
+        assert await pilot.mouse_up(help_message, offset=(15, 0))
+        await pilot.pause()
+        assert app.screen.get_selected_text() == "Interactive comm"
+        assert app.clipboard == "Interactive comm"
+        assert copied_to_system == ["Interactive comm"]
+
+        await pilot.press("ctrl+c")
+        assert app.clipboard == "Interactive comm"
+        assert copied_to_system == ["Interactive comm", "Interactive comm"]
+
+        app.clear_selection()
+        await pilot.pause()
+        question = app.query_one("#active-question-input", QuestionInput)
+        question.text = "input selection"
+        question.selection = ((0, 0), (0, 5))
+        question.focus()
+        await pilot.pause()
+        app.action_copy_or_cancel()
+        assert app.clipboard == "input"
+        assert copied_to_system[-1] == "input"
+
+        question.cursor_location = (0, 0)
+        cancelled: list[bool] = []
+        monkeypatch.setattr(app, "action_cancel_run", lambda: cancelled.append(True))
+        app.action_copy_or_cancel()
+        assert cancelled == [True]
+
+
+async def test_selecting_a_decision_id_copies_it_on_mouse_release(
+    app_paths: AppPaths,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    participant = FastParticipant()
+    app = EgoApp(
+        workspace=tmp_path,
+        paths=app_paths,
+        participants={participant.participant_id: participant},
+    )
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        copied_to_system: list[str] = []
+        monkeypatch.setattr(
+            "ego.tui.app.copy_to_macos_clipboard",
+            lambda text: copied_to_system.append(text) or True,
+        )
+
+        question = app.query_one("#question-input", QuestionInput)
+        question.text = "Keep the event boundary?"
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while app.current_final is None or app.running:
+                await pilot.pause()
+
+        decision_id = app.current_decision_id
+        assert decision_id is not None
+        active_question = app.query_one("#active-question-input", QuestionInput)
+        active_question.text = "/decisions"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+        decisions_message = list(timeline.query(".timeline-message"))[-1]
+        assert decision_id in str(decisions_message.render())
+        assert await pilot.mouse_down(decisions_message, offset=(2, 1))
+        assert await pilot.hover(
+            decisions_message,
+            offset=(len(decision_id) + 1, 1),
+        )
+        assert await pilot.mouse_up(
+            decisions_message,
+            offset=(len(decision_id) + 1, 1),
+        )
+        await pilot.pause()
+
+        assert app.screen.get_selected_text() == decision_id
+        assert app.clipboard == decision_id
+        assert copied_to_system[-1] == decision_id
 
 
 async def test_tui_requires_and_records_human_resolution_for_contested_result(

@@ -6,7 +6,7 @@ from textual.widgets import Button, Markdown, ProgressBar, Static
 
 from ego import __version__
 from ego.tui.assets import PORTRAIT, WORDMARK
-from ego.tui.input import QuestionInput
+from ego.tui.input import CommandPalette, QuestionInput
 from ego.tui.state import PHASES
 from ego.tui.timeline import DeliberationTimeline
 
@@ -76,6 +76,7 @@ class ActiveView(Vertical):
                             yield Button("Defer", id="defer-final", classes="action-defer")
                             yield Button("Reject", id="reject-final", classes="action-reject")
                 with Vertical(id="active-bottom-bar"):
+                    yield CommandPalette(id="active-command-palette")
                     yield QuestionInput(
                         placeholder="Deliberation in progress…",
                         soft_wrap=True,
@@ -101,6 +102,7 @@ class ActiveView(Vertical):
 
 class WelcomeQuestionBar(Vertical):
     def compose(self) -> ComposeResult:
+        yield CommandPalette(id="welcome-command-palette")
         yield QuestionInput(
             placeholder="What decision do you want to examine?",
             soft_wrap=True,
