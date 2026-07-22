@@ -291,8 +291,3 @@ uv run pytest
 uv run ruff check .
 uv run mypy
 ```
-
-The architecture site is stored in [`docs/`](docs) and deployed by
-[`pages.yml`](.github/workflows/pages.yml). Pull requests validate the page;
-relevant changes merged into `main` deploy automatically to
-[`https://rrmarto.github.io/ego/`](https://rrmarto.github.io/ego/).
