@@ -29,6 +29,36 @@ def test_session_presentation_uses_only_session_state() -> None:
     assert narrow_strip.plain.endswith("STATUS  RUNNING")
 
 
+def test_session_summary_reports_accumulated_provider_usage() -> None:
+    session = SessionState(
+        run_id="12345678-abcdef",
+        status="completed",
+        participants={
+            "claude": ParticipantState(
+                status="completed",
+                turns_completed=5,
+                total_tokens=155_315,
+                cost_usd=0.5717558,
+                usage_reported=True,
+            ),
+            "codex": ParticipantState(
+                status="completed",
+                turns_completed=5,
+                total_tokens=24_679,
+                usage_reported=True,
+            ),
+            "gemini": ParticipantState(status="completed", turns_completed=1),
+        },
+    )
+
+    summary = session_summary(session, mode="standard", elapsed=125)
+
+    assert "Elapsed: 02:05" in summary
+    assert "CLAUDE: 155.3k tok · $0.57" in summary
+    assert "CODEX: 24.7k tok" in summary
+    assert "GEMINI: not reported" in summary
+
+
 def test_participant_and_protocol_presentation_preserves_statuses() -> None:
     participants = {
         "codex": ParticipantState(status="completed", detail="Completed in 4.2s"),
@@ -66,7 +96,27 @@ def test_final_markdown_respects_transparency_mode() -> None:
     discussion = final_markdown(final, "decision-1", mode="discussion")
 
     assert "Keep the event boundary." in standard
+    assert "Verification scope" in standard
     assert "Supporting reasoning" not in standard
     assert "### Supporting reasoning" in discussion
     assert "### Disagreements" in discussion
     assert discussion.endswith("_Decision record: decision-1_")
+
+
+def test_contested_result_always_exposes_human_resolution_options() -> None:
+    final = FinalDecision(
+        run_id="run-1",
+        status=RunStatus.CONTESTED,
+        recommendation="Material disagreement remains.",
+        alternatives=["Option from Codex", "Option from Claude"],
+        confidence=Confidence.LOW,
+        confidence_reason="The recommendations are not equivalent.",
+        requires_human_resolution=True,
+    )
+
+    markdown = final_markdown(final, "decision-1", mode="standard")
+
+    assert "## Human decision required" in markdown
+    assert "### Option 1\n\nOption from Codex" in markdown
+    assert "### Option 2\n\nOption from Claude" in markdown
+    assert "/choose <number>" in markdown

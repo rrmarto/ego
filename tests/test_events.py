@@ -130,6 +130,15 @@ async def test_events_are_streamed_after_persistence_and_before_completion(
     assert event_types.index(DeliberationEventType.PARTICIPANT_TURN_STARTED) < event_types.index(
         DeliberationEventType.PARTICIPANT_TURN_COMPLETED
     )
+    completed = next(
+        item
+        for item in events
+        if item.event_type is DeliberationEventType.PARTICIPANT_TURN_COMPLETED
+        and item.phase is Phase.INDEPENDENT
+    )
+    call = database.get_call(str(completed.payload["call_id"]))
+    assert call["participant_id"] == participant.participant_id
+    assert Position.model_validate_json(call["parsed_json"]).recommendation == "Keep the boundary."
 
 
 @pytest.mark.asyncio
@@ -194,4 +203,3 @@ async def test_participant_failure_is_visible_before_run_failure(
     assert failed_turn.payload["error"] == "simulated participant failure"
     assert events[-1].event_type is DeliberationEventType.RUN_STATUS_CHANGED
     assert events[-1].payload["status"] == RunStatus.FAILED.value
-

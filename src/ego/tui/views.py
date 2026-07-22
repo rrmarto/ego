@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Markdown, ProgressBar, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Button, Markdown, ProgressBar, Static
 
 from ego import __version__
 from ego.tui.assets import PORTRAIT, WORDMARK
@@ -46,17 +46,35 @@ class ActiveView(Vertical):
         yield Static("", id="session-strip")
         with Horizontal(id="workspace-grid"):
             with Vertical(id="main-column"):
-                with Horizontal(id="active-brand-row"):
-                    yield Static(WORDMARK, id="active-brand")
-                    yield Static(
-                        "“ Because one confident model\n  was apparently not enough. ”",
-                        id="active-tagline",
-                    )
-                    yield Static("E G O  CLI", id="active-compact-brand")
-                yield Static("No active question", id="task-card")
-                yield Static("DELIBERATION", classes="section-title")
-                yield DeliberationTimeline(id="timeline", wrap=True, markup=False)
-                yield Markdown("", id="result")
+                with VerticalScroll(id="main-scroll"):
+                    with Horizontal(id="active-brand-row"):
+                        yield Static(WORDMARK, id="active-brand")
+                        yield Static(
+                            "“ Because one confident model\n  was apparently not enough. ”",
+                            id="active-tagline",
+                        )
+                        yield Static("E G O  CLI", id="active-compact-brand")
+                    yield Static("No active question", id="task-card")
+                    yield Static("DELIBERATION", classes="section-title")
+                    yield DeliberationTimeline(id="timeline")
+                    yield Markdown("", id="result")
+                    with Vertical(id="resolution-panel"):
+                        yield Static("HUMAN DECISION", classes="section-title")
+                        yield Static("", id="resolution-message")
+                        with Horizontal(id="resolution-actions"):
+                            yield Button(
+                                "Accept option 1",
+                                id="resolve-option-1",
+                                classes="action-accept",
+                            )
+                            yield Button(
+                                "Accept option 2",
+                                id="resolve-option-2",
+                                classes="action-accept",
+                            )
+                            yield Button("Accept", id="accept-final", classes="action-accept")
+                            yield Button("Defer", id="defer-final", classes="action-defer")
+                            yield Button("Reject", id="reject-final", classes="action-reject")
                 with Vertical(id="active-bottom-bar"):
                     yield QuestionInput(
                         placeholder="Deliberation in progress…",
@@ -68,9 +86,11 @@ class ActiveView(Vertical):
             with Vertical(id="side-column"):
                 with Vertical(id="session-panel", classes="side-panel"):
                     yield Static("SESSION SUMMARY", classes="panel-title")
+                    yield Static("", classes="panel-rule")
                     yield Static("Ready", id="session-summary")
                 with Vertical(id="participants-panel", classes="side-panel"):
                     yield Static("PARTICIPANTS", classes="panel-title")
+                    yield Static("", classes="panel-rule")
                     yield Static("Checking local CLIs…", id="participant-list")
                 with Vertical(id="protocol-panel", classes="side-panel"):
                     yield Static("PROTOCOL", classes="panel-title")

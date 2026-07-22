@@ -42,6 +42,8 @@ class Confidence(StrEnum):
 
 class EvidenceStatus(StrEnum):
     UNVALIDATED = "unvalidated"
+    CITATION_VERIFIED = "citation_verified"
+    # Kept so historical decision records written by v0.1.0 remain readable.
     VALID = "valid"
     INVALID = "invalid"
     STALE = "stale"
@@ -137,6 +139,15 @@ class FinalDecision(BaseModel):
     confidence_reason: str
     evidence: list[Evidence] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    verification_scope: str = (
+        "Ego verified citation paths, line ranges, and hashes; it did not mechanically prove "
+        "the semantic claims."
+    )
+    requires_human_resolution: bool = False
+
+    @property
+    def needs_human_resolution(self) -> bool:
+        return self.requires_human_resolution or self.status is RunStatus.CONTESTED
 
 
 class TurnRequest(BaseModel):
@@ -151,6 +162,14 @@ class TurnRequest(BaseModel):
     syntheses: dict[str, Synthesis] = Field(default_factory=dict)
 
 
+class UsageMetrics(BaseModel):
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+
+
 class ParticipantTurnResult(BaseModel):
     participant_id: str
     phase: Phase
@@ -158,6 +177,7 @@ class ParticipantTurnResult(BaseModel):
     raw_output: str
     duration_seconds: float
     model: str | None = None
+    usage: UsageMetrics | None = None
 
 
 class ProcessResult(BaseModel):

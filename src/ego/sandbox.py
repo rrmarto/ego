@@ -8,6 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+PROTECTED_DURABLE_ROOTS = (
+    Path("/Applications"),
+    Path("/Library"),
+    Path("/Network"),
+    Path("/System"),
+    Path("/Users"),
+    Path("/Volumes"),
+    Path("/bin"),
+    Path("/opt"),
+    Path("/sbin"),
+    Path("/usr"),
+)
 
 
 @dataclass(frozen=True)
@@ -16,19 +28,30 @@ class SandboxProbe:
     reason: str
 
 
-def seatbelt_profile(workspace: Path) -> str:
+def seatbelt_profile(workspace: Path, *, protect_user_data: bool = False) -> str:
     quoted = json.dumps(str(workspace.resolve()))
-    return "\n".join(
-        [
-            "(version 1)",
-            "(allow default)",
-            f"(deny file-write* (literal {quoted}) (subpath {quoted}))",
-        ]
-    )
+    rules = [
+        "(version 1)",
+        "(allow default)",
+        f"(deny file-write* (literal {quoted}) (subpath {quoted}))",
+    ]
+    if protect_user_data:
+        protected = {Path.home().resolve(), *PROTECTED_DURABLE_ROOTS}
+        for root in sorted(protected, key=str):
+            encoded = json.dumps(str(root))
+            rules.append(f"(deny file-write* (literal {encoded}) (subpath {encoded}))")
+    return "\n".join(rules)
 
 
-def wrap_read_only(command: list[str], workspace: Path) -> list[str]:
-    return [str(SANDBOX_EXEC), "-p", seatbelt_profile(workspace), *command]
+def wrap_read_only(
+    command: list[str], workspace: Path, *, protect_user_data: bool = False
+) -> list[str]:
+    return [
+        str(SANDBOX_EXEC),
+        "-p",
+        seatbelt_profile(workspace, protect_user_data=protect_user_data),
+        *command,
+    ]
 
 
 async def probe_seatbelt() -> SandboxProbe:

@@ -43,7 +43,7 @@ def validate_evidence(workspace: Path, evidence: Evidence) -> Evidence:
             update={
                 "file_sha256": _sha256(data),
                 "fragment_sha256": _sha256(fragment),
-                "status": EvidenceStatus.VALID,
+                "status": EvidenceStatus.CITATION_VERIFIED,
                 "validation_error": None,
             }
         )
@@ -55,7 +55,7 @@ def validate_evidence(workspace: Path, evidence: Evidence) -> Evidence:
 
 def revalidate_evidence(workspace: Path, evidence: Evidence) -> Evidence:
     current = validate_evidence(workspace, evidence)
-    if current.status is not EvidenceStatus.VALID:
+    if current.status is not EvidenceStatus.CITATION_VERIFIED:
         return current
     if evidence.file_sha256 and evidence.file_sha256 != current.file_sha256:
         return current.model_copy(

@@ -45,6 +45,33 @@ ego summon "Review the authentication architecture" --participant codex --partic
 `ask` uses every enabled and available participant. `summon` accepts repeated
 `--participant` flags or presents a selector in an interactive terminal.
 
+## Human decision
+
+Model agreement is corroboration, not proof. Ego verifies that cited source
+fragments match the workspace, labels that scope explicitly, and caps
+model-only consensus at moderate confidence.
+
+When recommendations remain materially different, the TUI displays numbered
+alternatives and waits for a human action. Choose an option with the displayed
+button or type:
+
+```text
+/choose 1
+/decide Adopt option 1 after the compatibility check
+/defer Need more evidence
+/reject The available alternatives are unsafe
+```
+
+The same workflow is available non-interactively:
+
+```bash
+ego decisions choose <decision-id> 1 --note "Preferred tradeoff"
+ego decisions decide <decision-id> "Human-authored conclusion"
+```
+
+The human resolution is appended to the decision record; Ego preserves the
+original contested result and its disagreements.
+
 Inspect persisted results:
 
 ```bash
@@ -57,10 +84,16 @@ ego decisions accept DECISION_ID --note "Proceed with this direction"
 
 ## Safety model
 
-Ego gives each CLI its native read-only flags and wraps it with macOS Seatbelt,
-denying writes to the target directory. If that external protection cannot be
+Ego wraps every CLI with macOS Seatbelt and denies writes to the target
+directory. Participants normally retain their native read-only controls. Codex
+uses its documented externally-sandboxed mode because macOS cannot nest its
+internal Seatbelt inside Ego's boundary; Ego additionally denies that process
+writes to durable user and system locations. The invocation uses a temporary
+`CODEX_HOME` with a private temporary authentication copy and receives no
+credentials belonging to other providers. If the external protection cannot be
 verified, the participant is reported as `unsafe` and is not executed. Ego
-never changes workspace permissions and never creates a workspace copy.
+never changes workspace permissions, global Codex settings, or workspace
+contents, and never creates a workspace copy.
 
 Raw provider output may contain project excerpts. It is stored in the user's
 application data directory and removed after 30 days. Structured records remain

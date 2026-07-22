@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ego.deliberation.finalization import (
+    SEMANTIC_VERIFICATION_WARNING,
     apply_workspace_changes,
     contested_final,
     final_from_synthesis,
@@ -402,18 +403,21 @@ class DeliberationEngine:
         merged_evidence = unique_evidence(
             item for synthesis in reconciled for item in synthesis.evidence
         )
-        confidence = (
-            Confidence.HIGH
-            if all(item.confidence is Confidence.HIGH for item in reconciled)
-            and not any(item.disagreements or item.material_conflicts for item in reconciled)
-            else Confidence.MODERATE
+        # Agreement between language models is corroboration, not deterministic proof.
+        # Until Ego has a claim verifier, model consensus must not produce HIGH confidence.
+        confidence = Confidence.MODERATE
+        confidence_reason = (
+            f"{canonical.confidence_reason} Model agreement alone is corroboration, so Ego caps "
+            "model-only confidence at moderate."
         )
         final = final_from_synthesis(
             run_id,
-            canonical.model_copy(update={"evidence": merged_evidence}),
+            canonical.model_copy(
+                update={"evidence": merged_evidence, "confidence_reason": confidence_reason}
+            ),
             RunStatus.COMPLETED,
             confidence,
-            [],
+            [SEMANTIC_VERIFICATION_WARNING],
         )
         return final.model_copy(
             update={

@@ -4,22 +4,32 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Markdown, RichLog, Static
+import pytest
+from textual.color import Color
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Button, Collapsible, Markdown, Static
 
 from ego.config import AppPaths
 from ego.events import DeliberationEvent, DeliberationEventType
 from ego.models import (
+    Argument,
     AvailabilityStatus,
     Confidence,
     ParticipantAvailability,
     ParticipantTurnResult,
+    PeerReview,
+    PeerReviewBundle,
     Phase,
     Position,
+    RunStatus,
+    Synthesis,
     TurnRequest,
+    UsageMetrics,
 )
+from ego.storage import Database
 from ego.tui.app import EgoApp, QuestionInput
 from ego.tui.state import SessionState
+from ego.tui.timeline import DeliberationTimeline
 
 
 class FastParticipant:
@@ -36,6 +46,9 @@ class FastParticipant:
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
         position = Position(
             recommendation="Keep the event boundary.",
+            arguments=[Argument(id="boundary", claim="Committed events remain authoritative.")],
+            alternatives=["Poll mutable run state."],
+            risks=["Consumers must handle event ordering."],
             confidence=Confidence.LOW,
             confidence_reason="Single simulated participant.",
         )
@@ -45,8 +58,72 @@ class FastParticipant:
             payload=position,
             raw_output=position.model_dump_json(),
             duration_seconds=0.1,
+            usage=UsageMetrics(
+                input_tokens=1_000,
+                output_tokens=200,
+                total_tokens=1_200,
+            ),
         )
 
+
+class ContestedParticipant:
+    def __init__(self, participant_id: str) -> None:
+        self.participant_id = participant_id
+
+    async def probe(self) -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id=self.participant_id,
+            status=AvailabilityStatus.AVAILABLE,
+            binary=f"/fake/{self.participant_id}",
+            version="test",
+        )
+
+    async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
+        if request.phase in {Phase.INDEPENDENT, Phase.REVISION}:
+            payload: Position | PeerReviewBundle | Synthesis = Position(
+                recommendation=f"{self.participant_id} recommendation",
+                arguments=[
+                    Argument(
+                        id=f"{self.participant_id}-claim",
+                        claim=f"{self.participant_id} claim",
+                    )
+                ],
+                confidence=Confidence.MODERATE,
+                confidence_reason="The simulated participants intentionally disagree.",
+                change_reason="The simulated position remains intentionally different.",
+            )
+        elif request.phase is Phase.PEER_REVIEW:
+            payload = PeerReviewBundle(
+                reviews=[
+                    PeerReview(
+                        target_participant=name,
+                        challenges=["The alternative remains materially different."],
+                    )
+                    for name in request.peer_positions
+                ]
+            )
+        else:
+            payload = Synthesis(
+                recommendation=f"Accept the {self.participant_id} approach.",
+                supporting_argument_ids=[f"{self.participant_id}-claim"],
+                confidence=Confidence.MODERATE,
+                confidence_reason="The simulated recommendations remain materially different.",
+                equivalent_to_peer=False if request.phase is Phase.RECONCILIATION else None,
+                material_conflicts=["The approaches use different boundaries."],
+            )
+        return ParticipantTurnResult(
+            participant_id=self.participant_id,
+            phase=request.phase,
+            payload=payload,
+            raw_output=payload.model_dump_json(),
+            duration_seconds=0.01,
+            usage=UsageMetrics(
+                input_tokens=1_000,
+                output_tokens=200,
+                total_tokens=1_200,
+                cost_usd=0.01 if self.participant_id == "claude" else None,
+            ),
+        )
 
 def event(
     event_type: DeliberationEventType,
@@ -92,7 +169,16 @@ def test_session_state_tracks_real_phase_and_participant_events() -> None:
             DeliberationEventType.PARTICIPANT_TURN_COMPLETED,
             participant="codex",
             phase=Phase.INDEPENDENT,
-            payload={"duration_seconds": 12.5},
+            payload={
+                "duration_seconds": 12.5,
+                "usage": {
+                    "input_tokens": 1_000,
+                    "output_tokens": 200,
+                    "cached_input_tokens": 0,
+                    "total_tokens": 1_200,
+                    "cost_usd": 0.02,
+                },
+            },
         )
     )
 
@@ -100,12 +186,23 @@ def test_session_state_tracks_real_phase_and_participant_events() -> None:
     assert state.phase is Phase.INDEPENDENT
     assert state.participants["codex"].status == "completed"
     assert state.participants["codex"].detail == "Completed in 12.5s"
+    assert state.participants["codex"].total_tokens == 1_200
+    assert state.participants["codex"].cost_usd == 0.02
 
 
 async def test_tui_runs_a_question_and_renders_the_decision(
     app_paths: AppPaths,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    clock_calls = 0
+
+    def fake_monotonic() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        return 100.0 if clock_calls == 1 else 225.0
+
+    monkeypatch.setattr("ego.tui.app.monotonic", fake_monotonic)
     participant = FastParticipant()
     app = EgoApp(
         workspace=tmp_path,
@@ -134,7 +231,7 @@ async def test_tui_runs_a_question_and_renders_the_decision(
         question.text = "Should we keep the event boundary?"
         await pilot.press("enter")
         async with asyncio.timeout(3):
-            while app.session.status != "completed":
+            while app.current_final is None or app.running:
                 await pilot.pause()
 
         assert app.session.completed_phases == 5
@@ -142,6 +239,21 @@ async def test_tui_runs_a_question_and_renders_the_decision(
         assert app.query_one("#active-view", Vertical).display
         assert app.query_one("#result", Markdown).display
         assert not app.query_one("#bottom-bar", Vertical).display
+        accept_button = app.query_one("#accept-final", Button)
+        defer_button = app.query_one("#defer-final", Button)
+        reject_button = app.query_one("#reject-final", Button)
+        assert accept_button.has_class("action-accept")
+        assert accept_button.styles.background == Color.parse("#42d66b")
+        assert defer_button.has_class("action-defer")
+        assert reject_button.has_class("action-reject")
+        assert reject_button.styles.background == Color.parse("#c94f5d")
+        assert defer_button.styles.background == Color.parse("#367db7")
+        assert defer_button.region.height == accept_button.region.height
+        assert defer_button.region.height == reject_button.region.height
+        assert app.elapsed_seconds == 125
+        session_text = str(app.query_one("#session-summary", Static).render())
+        assert "Elapsed: 02:05" in session_text
+        assert "CODEX: 1.2k tok" in session_text
         active_brand = app.query_one("#active-brand", Static)
         active_tagline = app.query_one("#active-tagline", Static)
         active_brand_row = app.query_one("#active-brand-row", Horizontal)
@@ -160,26 +272,60 @@ async def test_tui_runs_a_question_and_renders_the_decision(
         assert len(app.query("#active-quote")) == 0
 
         side_column = app.query_one("#side-column", Vertical)
+        panel_rules = list(app.query(".panel-rule"))
+        assert len(panel_rules) == 2
         for panel_id in ("session-panel", "participants-panel", "protocol-panel"):
             assert app.query_one(f"#{panel_id}", Vertical).parent is side_column
+        assert panel_rules[0].parent is app.query_one("#session-panel", Vertical)
+        assert panel_rules[1].parent is app.query_one("#participants-panel", Vertical)
 
-        timeline_text = "\n".join(line.text for line in app.query_one("#timeline", RichLog).lines)
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+        timeline_text = timeline.transcript_text
         assert "Question received by the protocol" in timeline_text
         assert "Proposals generated (1/1)" in timeline_text
         assert "Recommendation ready" in timeline_text
         assert "CODEX started" not in timeline_text
 
+        reasoning = list(timeline.query(Collapsible))[0]
+        assert reasoning.collapsed
+        reasoning_markdown = reasoning.query_one(Markdown)
+        assert "Keep the event boundary." in reasoning_markdown.source
+        assert "Committed events remain authoritative." in reasoning_markdown.source
+        assert "Consumers must handle event ordering." in reasoning_markdown.source
+        reasoning.query_one("CollapsibleTitle").focus()
+        await pilot.press("enter")
+        assert not reasoning.collapsed
+
         main_column = app.query_one("#main-column", Vertical)
+        main_scroll = app.query_one("#main-scroll", VerticalScroll)
         active_input = app.query_one("#active-question-input", QuestionInput)
         protocol_panel = app.query_one("#protocol-panel", Vertical)
+        assert timeline.parent is main_scroll
+        assert main_scroll.parent is main_column
+        assert active_input.parent is app.query_one("#active-bottom-bar", Vertical)
         assert active_input.region.x == main_column.content_region.x
         assert active_input.region.right == main_column.content_region.right
         assert protocol_panel.region.bottom == side_column.content_region.bottom
+        assert timeline.region.height >= 8
+        assert main_scroll.max_scroll_y > 0
         panel_heights = [
             app.query_one(f"#{panel_id}", Vertical).region.height
             for panel_id in ("session-panel", "participants-panel", "protocol-panel")
         ]
         assert max(panel_heights) - min(panel_heights) <= 1
+
+        main_scroll.scroll_home(animate=False)
+        await pilot.pause()
+        assert main_scroll.scroll_y == 0
+        main_scroll.scroll_end(animate=False)
+        await pilot.pause()
+        assert main_scroll.scroll_y == main_scroll.max_scroll_y
+        assert await pilot.click(accept_button)
+        await pilot.pause()
+        human_message = app.query_one("#resolution-message", Static).render()
+        assert "Final recommendation confirmed by you." in str(human_message)
+        assert "Keep the event boundary." not in str(human_message)
+        assert timeline.region.height >= 12
 
 
 async def test_tui_uses_compact_layout_for_narrow_terminals(
@@ -199,3 +345,76 @@ async def test_tui_uses_compact_layout_for_narrow_terminals(
         assert app.screen.has_class("narrow")
         assert app.query_one("#welcome-view", Vertical).display
         assert not app.query_one("#side-column", Vertical).display
+
+
+async def test_tui_requires_and_records_human_resolution_for_contested_result(
+    app_paths: AppPaths,
+    tmp_path: Path,
+) -> None:
+    participants = {
+        name: ContestedParticipant(name) for name in ("codex", "claude")
+    }
+    app = EgoApp(workspace=tmp_path, paths=app_paths, participants=participants)
+
+    async with app.run_test(size=(140, 50)) as pilot:
+        question = app.query_one("#question-input", QuestionInput)
+        question.text = "Which boundary should we choose?"
+        await pilot.press("enter")
+        async with asyncio.timeout(3):
+            while app.current_final is None:
+                await pilot.pause()
+
+        assert app.current_final.status is RunStatus.CONTESTED
+        assert app.session.status == "contested"
+        assert app.query_one("#resolution-panel", Vertical).display
+        assert app.query_one("#resolve-option-1", Button).display
+        assert app.query_one("#resolve-option-2", Button).display
+        assert not app.query_one("#accept-final", Button).display
+
+        timeline = app.query_one("#timeline", DeliberationTimeline)
+        main_scroll = app.query_one("#main-scroll", VerticalScroll)
+        assert timeline.region.height >= 8
+        assert timeline.parent is main_scroll
+        assert main_scroll.max_scroll_y > 0
+        phase_cards = list(timeline.query(Collapsible))
+        assert len(phase_cards) == 8
+        assert all(card.collapsed for card in phase_cards)
+        timeline_text = timeline.transcript_text
+        assert timeline_text.count("proposal ready") == 2
+        assert timeline_text.count("revised position") == 2
+        assert timeline_text.count("cross-synthesis") == 2
+        assert timeline_text.count("final reconciliation") == 2
+
+        phase_sources = [card.query_one(Markdown).source for card in phase_cards]
+        assert sum("### Proposal" in source for source in phase_sources) == 2
+        assert sum("### Revised position" in source for source in phase_sources) == 2
+        assert sum("### Cross-synthesis" in source for source in phase_sources) == 2
+        assert sum("### Final reconciliation" in source for source in phase_sources) == 2
+        assert any("**Changed position:** no" in source for source in phase_sources)
+        assert any(
+            "The simulated position remains intentionally different." in source
+            for source in phase_sources
+        )
+        assert any("**Equivalent to peer:** no" in source for source in phase_sources)
+        assert any("The approaches use different boundaries." in source for source in phase_sources)
+        assert not any("### Peer review" in source for source in phase_sources)
+        collapsed_scroll_max = main_scroll.max_scroll_y
+        final_reconciliation = phase_cards[-1]
+        final_reconciliation.query_one("CollapsibleTitle").focus()
+        await pilot.press("enter")
+        assert not final_reconciliation.collapsed
+        assert main_scroll.max_scroll_y > collapsed_scroll_max
+
+        resolve_button = app.query_one("#resolve-option-1", Button)
+        resolve_button.scroll_visible(animate=False)
+        await pilot.pause()
+        assert await pilot.click(resolve_button)
+        await pilot.pause()
+
+        assert app.session.status == "accepted"
+        assert app.current_decision_id is not None
+        decision = Database(app_paths).get_decision(app.current_decision_id)
+        assert decision["state"] == "accepted"
+        assert decision["resolutions"][0]["alternative_index"] == 1
+        assert not app.query_one("#resolution-actions", Horizontal).display
+        assert timeline.region.height >= 12

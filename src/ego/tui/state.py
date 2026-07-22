@@ -26,6 +26,10 @@ PHASE_LABELS = {
 class ParticipantState:
     status: str = "pending"
     detail: str = "Waiting"
+    turns_completed: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    usage_reported: bool = False
 
 
 @dataclass
@@ -71,8 +75,14 @@ class SessionState:
         elif event.event_type is DeliberationEventType.PARTICIPANT_TURN_COMPLETED and participant:
             state = self._participant(participant)
             state.status = "completed"
+            state.turns_completed += 1
             duration = event.payload.get("duration_seconds")
             state.detail = f"Completed in {float(duration):.1f}s" if duration else "Completed"
+            usage = event.payload.get("usage")
+            if isinstance(usage, dict):
+                state.usage_reported = True
+                state.total_tokens += int(usage.get("total_tokens") or 0)
+                state.cost_usd += float(usage.get("cost_usd") or 0)
         elif event.event_type is DeliberationEventType.PARTICIPANT_TURN_FAILED and participant:
             state = self._participant(participant)
             state.status = "failed"
@@ -80,7 +90,6 @@ class SessionState:
         elif event.event_type is DeliberationEventType.PHASE_COMPLETED and event.phase:
             self.completed_phases = PHASES.index(event.phase) + 1
         elif event.event_type is DeliberationEventType.DECISION_CREATED:
-            self.status = "completed"
             self.completed_phases = len(PHASES)
 
     def _participant(self, participant_id: str) -> ParticipantState:

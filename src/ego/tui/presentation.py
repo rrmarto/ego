@@ -18,8 +18,12 @@ PARTICIPANT_COLORS = {
 }
 
 STATUS_COLORS = {
+    "accepted": "green",
     "completed": "green",
+    "contested": "yellow",
+    "deferred": "yellow",
     "running": "green",
+    "rejected": "red",
     "starting": "yellow",
     "failed": "red",
     "interrupted": "yellow",
@@ -28,10 +32,35 @@ STATUS_COLORS = {
 
 def session_summary(session: SessionState, *, mode: str, elapsed: int) -> str:
     run_label = session.run_id[:8] if session.run_id else "new"
-    return (
+    summary = (
         f"Run: {run_label}\nStatus: {session.status}\n"
         f"Mode: {mode}\nElapsed: {elapsed // 60:02d}:{elapsed % 60:02d}"
     )
+    active = [
+        (name, state)
+        for name, state in sorted(session.participants.items())
+        if state.turns_completed
+    ]
+    if not active:
+        return summary
+    usage_lines = ["Usage:"]
+    for name, state in active:
+        if not state.usage_reported:
+            usage = "not reported"
+        else:
+            usage = f"{_compact_tokens(state.total_tokens)} tok"
+            if state.cost_usd:
+                usage += f" · ${state.cost_usd:.2f}"
+        usage_lines.append(f"{name.upper()}: {usage}")
+    return summary + "\n" + "\n".join(usage_lines)
+
+
+def _compact_tokens(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}m"
+    if tokens >= 1_000:
+        return f"{tokens / 1_000:.1f}k"
+    return str(tokens)
 
 
 def session_strip(session: SessionState, *, mode: str, width: int, version: str) -> Text:
@@ -90,6 +119,7 @@ def final_markdown(final: FinalDecision, decision_id: str, *, mode: str) -> str:
         "## Recommendation",
         final.recommendation,
         f"**Confidence:** {final.confidence.value} — {final.confidence_reason}",
+        f"**Verification scope:** {final.verification_scope}",
     ]
     if mode != "standard":
         for heading, values in (
@@ -101,5 +131,17 @@ def final_markdown(final: FinalDecision, decision_id: str, *, mode: str) -> str:
         ):
             if values:
                 sections.extend((f"### {heading}", *(f"- {value}" for value in values)))
+    if final.warnings:
+        sections.extend(("### Warnings", *(f"- {warning}" for warning in final.warnings)))
+    if final.needs_human_resolution:
+        sections.extend(("## Human decision required",))
+        for index, alternative in enumerate(final.alternatives, 1):
+            sections.extend((f"### Option {index}", alternative))
+        sections.append(
+            "Choose an option below, use `/choose <number>`, record your own conclusion with "
+            "`/decide <text>`, or use `/defer` or `/reject`."
+        )
+    else:
+        sections.append("Use the buttons below or `/accept`, `/defer`, or `/reject`.")
     sections.append(f"_Decision record: {decision_id}_")
     return "\n\n".join(sections)

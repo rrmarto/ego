@@ -5,6 +5,8 @@ import json
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -17,9 +19,10 @@ from ego.models import (
     Position,
     Synthesis,
     TurnRequest,
+    UsageMetrics,
 )
 from ego.prompts import build_prompt, response_model, response_schema, validate_response
-from ego.runner import ProcessFailure, run_read_only
+from ego.runner import ProcessFailure, reduced_environment, run_read_only
 from ego.sandbox import SandboxProbe, probe_seatbelt
 
 
@@ -51,6 +54,8 @@ class CliParticipant(ABC):
     participant_id: str
     default_binary: str
     required_help_tokens: tuple[str, ...]
+    requires_external_sandbox = False
+    environment_keys: frozenset[str] = frozenset()
 
     def __init__(self, participant_config: ParticipantConfig, ego_config: EgoConfig) -> None:
         self.config = participant_config
@@ -63,16 +68,24 @@ class CliParticipant(ABC):
             return str(path.resolve()) if path.is_file() else None
         return shutil.which(self.default_binary)
 
-    async def _metadata(self, binary: str) -> tuple[str | None, str]:
+    @contextmanager
+    def probe_environment(self) -> Iterator[dict[str, str]]:
+        yield reduced_environment(self.environment_keys)
+
+    async def _metadata(
+        self, binary: str, environment: dict[str, str]
+    ) -> tuple[str | None, str]:
         version_process = await asyncio.create_subprocess_exec(
             binary,
             "--version",
+            env=environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
         version_out, _ = await version_process.communicate()
         help_process = await asyncio.create_subprocess_exec(
             *self.help_command(binary),
+            env=environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -87,12 +100,15 @@ class CliParticipant(ABC):
         del binary
         return None
 
-    async def _authentication(self, binary: str) -> tuple[str, str | None]:
+    async def _authentication(
+        self, binary: str, environment: dict[str, str]
+    ) -> tuple[str, str | None]:
         command = self.auth_command(binary)
         if command is None:
             return "unknown", None
         process = await asyncio.create_subprocess_exec(
             *command,
+            env=environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -117,37 +133,38 @@ class CliParticipant(ABC):
                 reason=f"{self.default_binary} executable not found",
                 model=self.config.model,
             )
-        try:
-            version, help_text = await self._metadata(binary)
-        except OSError as error:
-            return ParticipantAvailability(
-                participant_id=self.participant_id,
-                status=AvailabilityStatus.MISCONFIGURED,
-                binary=binary,
-                reason=str(error),
-                model=self.config.model,
-            )
-        missing = [token for token in self.required_help_tokens if token not in help_text]
-        if missing:
-            return ParticipantAvailability(
-                participant_id=self.participant_id,
-                status=AvailabilityStatus.UNSUPPORTED,
-                binary=binary,
-                version=version,
-                model=self.config.model,
-                reason=f"missing required CLI options: {', '.join(missing)}",
-            )
-        sandbox = await shared_sandbox_probe()
-        if not sandbox.safe:
-            return ParticipantAvailability(
-                participant_id=self.participant_id,
-                status=AvailabilityStatus.UNSAFE,
-                binary=binary,
-                version=version,
-                model=self.config.model,
-                reason=sandbox.reason,
-            )
-        authentication, auth_detail = await self._authentication(binary)
+        with self.probe_environment() as environment:
+            try:
+                version, help_text = await self._metadata(binary, environment)
+            except OSError as error:
+                return ParticipantAvailability(
+                    participant_id=self.participant_id,
+                    status=AvailabilityStatus.MISCONFIGURED,
+                    binary=binary,
+                    reason=str(error),
+                    model=self.config.model,
+                )
+            missing = [token for token in self.required_help_tokens if token not in help_text]
+            if missing:
+                return ParticipantAvailability(
+                    participant_id=self.participant_id,
+                    status=AvailabilityStatus.UNSUPPORTED,
+                    binary=binary,
+                    version=version,
+                    model=self.config.model,
+                    reason=f"missing required CLI options: {', '.join(missing)}",
+                )
+            sandbox = await shared_sandbox_probe()
+            if not sandbox.safe:
+                return ParticipantAvailability(
+                    participant_id=self.participant_id,
+                    status=AvailabilityStatus.UNSAFE,
+                    binary=binary,
+                    version=version,
+                    model=self.config.model,
+                    reason=sandbox.reason,
+                )
+            authentication, auth_detail = await self._authentication(binary, environment)
         if authentication == "unauthenticated":
             return ParticipantAvailability(
                 participant_id=self.participant_id,
@@ -207,6 +224,10 @@ class CliParticipant(ABC):
     def cleanup_command(self, command: list[str]) -> None:
         del command
 
+    def extract_usage(self, stdout: str) -> UsageMetrics | None:
+        del stdout
+        return None
+
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
         availability = await self.probe()
         if availability.status is not AvailabilityStatus.AVAILABLE or not availability.binary:
@@ -216,24 +237,28 @@ class CliParticipant(ABC):
         errors: str | None = None
         raw_outputs: list[str] = []
         duration = 0.0
+        usage: UsageMetrics | None = None
         for _ in range(2):
             prompt = build_prompt(request, correction=errors)
             try:
                 command = self.command(availability.binary, schema, request)
-                process = await run_read_only(
-                    command,
-                    workspace=request.workspace,
-                    stdin=prompt,
-                    timeout_seconds=self.config.timeout_seconds,
-                    output_limit_bytes=self.ego_config.output_limit_bytes,
-                )
-                self.cleanup_command(command)
-            except ProcessFailure as error:
-                if "command" in locals():
+                try:
+                    process = await run_read_only(
+                        command,
+                        workspace=request.workspace,
+                        stdin=prompt,
+                        timeout_seconds=self.config.timeout_seconds,
+                        output_limit_bytes=self.ego_config.output_limit_bytes,
+                        require_external_sandbox=self.requires_external_sandbox,
+                        environment_keys=self.environment_keys,
+                    )
+                finally:
                     self.cleanup_command(command)
+            except ProcessFailure as error:
                 raise ParticipantError(str(error)) from error
             raw_outputs.append(process.stdout)
             duration += process.duration_seconds
+            usage = _merge_usage(usage, self.extract_usage(process.stdout))
             if process.returncode != 0:
                 detail = process.stderr.strip() or process.stdout.strip()
                 raise ParticipantError(f"CLI exited {process.returncode}: {detail[-1000:]}")
@@ -248,6 +273,7 @@ class CliParticipant(ABC):
                     raw_output="\n--- correction attempt ---\n".join(raw_outputs),
                     duration_seconds=duration,
                     model=self.config.model,
+                    usage=usage,
                 )
             except (ParticipantError, ValueError, json.JSONDecodeError) as error:
                 errors = str(error)
@@ -261,3 +287,20 @@ class CliParticipant(ABC):
             return handle.name
         finally:
             handle.close()
+
+
+def _merge_usage(
+    current: UsageMetrics | None, addition: UsageMetrics | None
+) -> UsageMetrics | None:
+    if addition is None:
+        return current
+    if current is None:
+        return addition
+    costs = [value for value in (current.cost_usd, addition.cost_usd) if value is not None]
+    return UsageMetrics(
+        input_tokens=current.input_tokens + addition.input_tokens,
+        output_tokens=current.output_tokens + addition.output_tokens,
+        cached_input_tokens=current.cached_input_tokens + addition.cached_input_tokens,
+        total_tokens=current.total_tokens + addition.total_tokens,
+        cost_usd=sum(costs) if costs else None,
+    )

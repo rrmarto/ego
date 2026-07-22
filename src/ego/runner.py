@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from ego.models import ProcessResult
-from ego.sandbox import wrap_read_only
+from ego.sandbox import SANDBOX_EXEC, wrap_read_only
 
 
 class ProcessFailure(RuntimeError):
@@ -21,7 +21,7 @@ class OutputLimitExceeded(ProcessFailure):
     pass
 
 
-def reduced_environment() -> dict[str, str]:
+def reduced_environment(extra_keys: frozenset[str] = frozenset()) -> dict[str, str]:
     allowed = {
         "HOME",
         "PATH",
@@ -32,14 +32,7 @@ def reduced_environment() -> dict[str, str]:
         "LANG",
         "LC_ALL",
         "TERM",
-        "CODEX_HOME",
-        "CLAUDE_CONFIG_DIR",
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-    }
+    } | extra_keys
     return {key: value for key, value in os.environ.items() if key in allowed}
 
 
@@ -50,13 +43,21 @@ async def run_read_only(
     stdin: str,
     timeout_seconds: float,
     output_limit_bytes: int,
+    require_external_sandbox: bool = False,
+    environment_keys: frozenset[str] = frozenset(),
 ) -> ProcessResult:
-    wrapped = wrap_read_only(command, workspace)
+    wrapped = wrap_read_only(
+        command,
+        workspace,
+        protect_user_data=require_external_sandbox,
+    )
+    if require_external_sandbox and wrapped[:2] != [str(SANDBOX_EXEC), "-p"]:
+        raise ProcessFailure("participant requires Ego's external Seatbelt boundary")
     started = time.monotonic()
     process = await asyncio.create_subprocess_exec(
         *wrapped,
         cwd=workspace,
-        env=reduced_environment(),
+        env=reduced_environment(environment_keys),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

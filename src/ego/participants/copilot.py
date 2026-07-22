@@ -5,6 +5,7 @@ from ego.participants.base import CliParticipant
 class CopilotParticipant(CliParticipant):
     participant_id = "copilot"
     default_binary = "copilot"
+    environment_keys = frozenset({"GH_TOKEN", "GITHUB_TOKEN"})
     required_help_tokens = ("--deny-tool", "--no-ask-user")
 
     def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:

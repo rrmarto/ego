@@ -15,6 +15,16 @@ def test_profile_denies_workspace_writes(tmp_path: Path) -> None:
     assert wrapped[-2:] == ["/bin/echo", "ok"]
 
 
+def test_external_participant_profile_protects_durable_user_data(tmp_path: Path) -> None:
+    profile = seatbelt_profile(tmp_path, protect_user_data=True)
+
+    assert f'(subpath "{Path.home().resolve()}")' in profile
+    assert '(subpath "/Users")' in profile
+    assert '(subpath "/Volumes")' in profile
+    assert '(subpath "/Applications")' in profile
+    assert '(subpath "/private/tmp")' not in profile
+
+
 @pytest.mark.asyncio
 async def test_real_seatbelt_read_write_probe_when_nesting_is_supported() -> None:
     result = await probe_seatbelt()

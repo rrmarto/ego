@@ -22,6 +22,9 @@ def response_schema(phase: Phase) -> dict[str, object]:
 
 
 def validate_response(request: TurnRequest, response: BaseModel) -> None:
+    if isinstance(response, Synthesis):
+        _validate_synthesis_response(request, response)
+        return
     if request.phase is not Phase.REVISION or not isinstance(response, Position):
         return
     if request.own_position is None:
@@ -40,6 +43,41 @@ def validate_response(request: TurnRequest, response: BaseModel) -> None:
             "a maintained position must preserve at least one prior argument id; "
             "otherwise mark changed_position true and explain the change"
         )
+
+
+def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> None:
+    placeholders = {"test", "placeholder", "tbd"}
+    errors: list[str] = []
+    if response.recommendation.strip().casefold() in placeholders:
+        errors.append("synthesis requires a real recommendation, not a placeholder")
+    if len(response.confidence_reason.strip()) < 12:
+        errors.append("synthesis requires a substantive confidence reason")
+    known_argument_ids: set[str] | None = None
+    if request.phase is Phase.SYNTHESIS:
+        known_argument_ids = {
+            argument.id
+            for position in request.peer_positions.values()
+            for argument in position.arguments
+        }
+    elif request.phase is Phase.RECONCILIATION:
+        known_argument_ids = {
+            argument_id
+            for synthesis in request.syntheses.values()
+            for argument_id in synthesis.supporting_argument_ids
+        }
+    if known_argument_ids is not None:
+        unknown_argument_ids = sorted(
+            set(response.supporting_argument_ids) - known_argument_ids
+        )
+        if unknown_argument_ids:
+            errors.append(
+                "synthesis referenced unknown argument ids: "
+                + ", ".join(unknown_argument_ids)
+            )
+    if request.phase is Phase.RECONCILIATION and response.equivalent_to_peer is None:
+        errors.append("reconciliation requires an explicit equivalence decision")
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def _strict_schema(value: object) -> object:
@@ -64,11 +102,15 @@ def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
     instructions = {
         Phase.INDEPENDENT: (
             "Analyze independently. Inspect relevant files before making repository claims. "
-            "Do not infer or imitate other participants."
+            "Do not infer or imitate other participants. For every critical claim, actively try "
+            "to falsify it. When behavior depends on a language, runtime, framework, or tool "
+            "version, inspect the repository manifest or version constraint before concluding."
         ),
         Phase.PEER_REVIEW: (
             "Review every peer position. Identify valid points, factual mistakes, unsupported "
-            "assumptions, missing evidence, and objectively stronger arguments."
+            "assumptions, missing evidence, and objectively stronger arguments. Try to disprove "
+            "every critical claim instead of treating agreement as corroboration. Check relevant "
+            "runtime and manifest constraints for version-sensitive claims."
         ),
         Phase.REVISION: (
             "Reconsider your position using the peer reviews. Change it only for a stronger "
@@ -77,7 +119,9 @@ def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
         ),
         Phase.SYNTHESIS: (
             "Synthesize the strongest supported arguments without voting and without adding new "
-            "evidence. Preserve credible alternatives and material disagreement."
+            "evidence. Preserve credible alternatives and material disagreement. Never describe "
+            "a semantic claim as verified merely because its citation status is valid or because "
+            "multiple models repeated it."
         ),
         Phase.RECONCILIATION: (
             "Compare the two syntheses. Set equivalent_to_peer true only when their material "
@@ -97,6 +141,11 @@ You have equal authority with every other participant. {tool_instruction}
 You must not use the web, delegate, or implement the recommendation.
 Give concise, auditable rationale rather than private chain-of-thought. Every repository-specific
 claim should cite a relative file path and exact line range. Respond in {request.language}.
+A citation status only confirms that the cited path, lines, and hash match the workspace. It does
+not prove that the explanation or claim is semantically correct. Model agreement is not independent
+proof. Keep unproven semantic claims explicit in assumptions, risks, or disagreements.
+Never return test or placeholder content. Supporting argument ids must exactly match ids supplied
+in the structured context.
 
 Phase: {request.phase.value}
 Question: {request.question}

@@ -108,7 +108,10 @@ async def test_four_participant_deliberation_completes(database: Database, tmp_p
     )
 
     assert outcome.final.status is RunStatus.COMPLETED
-    assert outcome.final.confidence is Confidence.HIGH
+    assert outcome.final.confidence is Confidence.MODERATE
+    assert "caps model-only confidence" in outcome.final.confidence_reason
+    assert "semantic claims" in outcome.final.verification_scope
+    assert any("not mechanically proven" in warning for warning in outcome.final.warnings)
     assert database.get_decision(outcome.decision_id)["state"] == "recommended"
     phases = {call["phase"] for call in database.get_run(outcome.final.run_id)["calls"]}
     assert phases == {phase.value for phase in Phase}
@@ -143,3 +146,4 @@ async def test_non_equivalent_synthesis_is_contested(database: Database, tmp_pat
     )
     assert outcome.final.status is RunStatus.CONTESTED
     assert outcome.final.confidence is Confidence.LOW
+    assert outcome.final.requires_human_resolution

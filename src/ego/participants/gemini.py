@@ -5,6 +5,7 @@ from ego.participants.base import CliParticipant
 class GeminiParticipant(CliParticipant):
     participant_id = "gemini"
     default_binary = "gemini"
+    environment_keys = frozenset({"GEMINI_API_KEY", "GOOGLE_API_KEY"})
     required_help_tokens = ("--approval-mode", "--output-format")
 
     def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:

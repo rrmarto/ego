@@ -1,4 +1,7 @@
+import asyncio
 import json
+import stat
+from pathlib import Path
 
 import pytest
 
@@ -11,14 +14,40 @@ from ego.models import (
     Phase,
     Position,
     ProcessResult,
+    Synthesis,
     TurnRequest,
+    UsageMetrics,
 )
 from ego.participants.claude import ClaudeParticipant
 from ego.participants.codex import CodexParticipant
-from ego.prompts import validate_response
+from ego.prompts import build_prompt, validate_response
 
 
-def test_codex_command_enforces_native_read_only_flags() -> None:
+def test_prompt_requires_falsification_and_explains_citation_scope() -> None:
+    prompt = build_prompt(
+        TurnRequest(
+            run_id="run",
+            phase=Phase.INDEPENDENT,
+            question="Is this syntax valid?",
+            workspace=".",
+        )
+    )
+    normalized = prompt.replace("\n", " ")
+
+    assert "actively try to falsify" in prompt
+    assert "runtime" in prompt and "version" in prompt
+    assert "does not prove" in normalized
+    assert "Model agreement is not independent proof" in normalized
+
+
+def test_codex_command_uses_only_ego_external_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    auth_file = source_home / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
     participant = CodexParticipant(ParticipantConfig(model="test-model"), EgoConfig())
     request = TurnRequest(
         run_id="run",
@@ -27,8 +56,17 @@ def test_codex_command_enforces_native_read_only_flags() -> None:
         workspace=".",
     )
     command = participant.command("/usr/local/bin/codex", Position.model_json_schema(), request)
-    assert command[:2] == ["/usr/local/bin/codex", "exec"]
-    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[0] == "/usr/bin/env"
+    runtime_home = Path(command[1].removeprefix("HOME="))
+    assert command[2] == f"CODEX_HOME={runtime_home}"
+    assert runtime_home != source_home
+    runtime_auth = runtime_home / "auth.json"
+    assert runtime_auth.read_text(encoding="utf-8") == "{}"
+    assert stat.S_IMODE(runtime_auth.stat().st_mode) == 0o600
+    assert command[3:5] == ["/usr/local/bin/codex", "exec"]
+    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert "--sandbox" not in command
+    assert participant.requires_external_sandbox
     assert "--ephemeral" in command
     assert "--ignore-user-config" in command
     assert "--ignore-rules" in command
@@ -36,6 +74,15 @@ def test_codex_command_enforces_native_read_only_flags() -> None:
     disabled = [command[index + 1] for index, value in enumerate(command) if value == "--disable"]
     assert {"apps", "browser_use", "computer_use", "multi_agent"} <= set(disabled)
     assert command[-1] == "-"
+    participant.cleanup_command(command)
+    assert not runtime_home.exists()
+
+    with participant.probe_environment() as environment:
+        probe_home = Path(environment["CODEX_HOME"])
+        assert environment["HOME"] == str(probe_home)
+        assert probe_home != source_home
+        assert (probe_home / "auth.json").read_text(encoding="utf-8") == "{}"
+    assert not probe_home.exists()
 
 
 def test_claude_tools_are_limited_by_phase() -> None:
@@ -66,6 +113,55 @@ def test_claude_tools_are_limited_by_phase() -> None:
     assert revision_command[revision_command.index("--effort") + 1] == "medium"
 
 
+def test_codex_extracts_reported_turn_usage() -> None:
+    participant = CodexParticipant(ParticipantConfig(), EgoConfig())
+    output = "\n".join(
+        (
+            json.dumps({"type": "thread.started"}),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 21_104,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 3_575,
+                    },
+                }
+            ),
+        )
+    )
+
+    assert participant.extract_usage(output) == UsageMetrics(
+        input_tokens=21_104,
+        output_tokens=3_575,
+        cached_input_tokens=0,
+        total_tokens=24_679,
+    )
+
+
+def test_claude_extracts_cached_tokens_and_reported_cost() -> None:
+    participant = ClaudeParticipant(ParticipantConfig(), EgoConfig())
+    output = json.dumps(
+        {
+            "usage": {
+                "input_tokens": 8,
+                "cache_creation_input_tokens": 37_505,
+                "cache_read_input_tokens": 97_406,
+                "output_tokens": 20_396,
+            },
+            "total_cost_usd": 0.5717558,
+        }
+    )
+
+    assert participant.extract_usage(output) == UsageMetrics(
+        input_tokens=134_919,
+        output_tokens=20_396,
+        cached_input_tokens=97_406,
+        total_tokens=155_315,
+        cost_usd=0.5717558,
+    )
+
+
 def test_degraded_unchanged_revision_is_rejected() -> None:
     previous = Position(
         recommendation="Keep Textual.",
@@ -91,6 +187,74 @@ def test_degraded_unchanged_revision_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="substantive change reason"):
         validate_response(request, degraded)
+
+
+def test_placeholder_synthesis_is_rejected() -> None:
+    request = _synthesis_request()
+    placeholder = Synthesis(
+        recommendation="Test",
+        supporting_argument_ids=["a"],
+        alternatives=["a"],
+        disagreements=["a"],
+        assumptions=["a"],
+        risks=["a"],
+        confidence=Confidence.MODERATE,
+        confidence_reason="test",
+        material_conflicts=["a"],
+    )
+
+    with pytest.raises(ValueError) as error:
+        validate_response(request, placeholder)
+    validation_error = str(error.value)
+    assert "not a placeholder" in validation_error
+    assert "substantive confidence reason" in validation_error
+    assert "unknown argument ids: a" in validation_error
+
+
+def test_synthesis_rejects_unknown_argument_ids() -> None:
+    synthesis = Synthesis(
+        recommendation="Keep the external boundary and document its limits.",
+        supporting_argument_ids=["invented-id"],
+        confidence=Confidence.MODERATE,
+        confidence_reason="The cited boundary is the strongest available argument.",
+    )
+
+    with pytest.raises(ValueError, match="unknown argument ids: invented-id"):
+        validate_response(_synthesis_request(), synthesis)
+
+
+def test_reconciliation_requires_explicit_equivalence_decision() -> None:
+    request = TurnRequest(
+        run_id="run",
+        phase=Phase.RECONCILIATION,
+        question="Are these positions equivalent?",
+        workspace=".",
+    )
+    synthesis = Synthesis(
+        recommendation="The recommendations remain materially different.",
+        confidence=Confidence.MODERATE,
+        confidence_reason="Their proposed boundaries have materially different scope.",
+    )
+
+    with pytest.raises(ValueError, match="explicit equivalence decision"):
+        validate_response(request, synthesis)
+
+
+def _synthesis_request() -> TurnRequest:
+    return TurnRequest(
+        run_id="run",
+        phase=Phase.SYNTHESIS,
+        question="Which boundary should we use?",
+        workspace=".",
+        peer_positions={
+            "codex": Position(
+                recommendation="Keep the external boundary.",
+                arguments=[Argument(id="external-boundary", claim="It contains writes.")],
+                confidence=Confidence.MODERATE,
+                confidence_reason="The repository boundary supports it.",
+            )
+        },
+    )
 
 
 def test_maintained_revision_preserves_argument_continuity() -> None:
@@ -165,8 +329,12 @@ async def test_degraded_revision_receives_one_corrective_attempt(
         stdin: str,
         timeout_seconds: float,
         output_limit_bytes: int,
+        require_external_sandbox: bool,
+        environment_keys: frozenset[str],
     ) -> ProcessResult:
         del workspace, timeout_seconds, output_limit_bytes
+        assert not require_external_sandbox
+        assert environment_keys == ClaudeParticipant.environment_keys
         prompts.append(stdin)
         payload = degraded if len(prompts) == 1 else corrected
         return ProcessResult(
@@ -201,6 +369,54 @@ def test_codex_jsonl_agent_message_is_extracted() -> None:
         ]
     )
     assert participant.extract_json(output) == payload
+
+
+@pytest.mark.asyncio
+async def test_codex_temporary_home_is_removed_when_turn_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+    participant = CodexParticipant(ParticipantConfig(), EgoConfig())
+    runtime_homes: list[Path] = []
+    original_command = participant.command
+
+    async def fake_probe() -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id="codex",
+            status=AvailabilityStatus.AVAILABLE,
+            binary="/usr/local/bin/codex",
+        )
+
+    def capture_command(
+        binary: str, schema: dict[str, object], request: TurnRequest
+    ) -> list[str]:
+        command = original_command(binary, schema, request)
+        runtime_homes.append(Path(command[1].removeprefix("HOME=")))
+        return command
+
+    async def cancelled_run(*args: object, **kwargs: object) -> ProcessResult:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(participant, "probe", fake_probe)
+    monkeypatch.setattr(participant, "command", capture_command)
+    monkeypatch.setattr("ego.participants.base.run_read_only", cancelled_run)
+
+    with pytest.raises(asyncio.CancelledError):
+        await participant.respond(
+            TurnRequest(
+                run_id="cancelled",
+                phase=Phase.INDEPENDENT,
+                question="Read only.",
+                workspace=tmp_path,
+            )
+        )
+
+    assert runtime_homes
+    assert all(not path.exists() for path in runtime_homes)
 
 
 def test_response_models_are_phase_specific() -> None:

@@ -115,8 +115,13 @@ def render_final(final: FinalDecision, mode: TransparencyMode) -> None:
     typer.echo(f"Confidence: {final.confidence.value} — {final.confidence_reason}")
     typer.echo("\nRecommendation\n")
     typer.echo(final.recommendation)
+    typer.echo(f"\nVerification scope: {final.verification_scope}")
     for warning in final.warnings:
         typer.echo(f"WARNING: {warning}", err=True)
+    if final.needs_human_resolution:
+        typer.echo("\nHuman resolution required")
+        for index, alternative in enumerate(final.alternatives, 1):
+            typer.echo(f"{index}. {alternative}")
     if mode is TransparencyMode.STANDARD:
         return
     sections = {
@@ -134,9 +139,13 @@ def render_final(final: FinalDecision, mode: TransparencyMode) -> None:
     if final.evidence:
         typer.echo("\nEvidence")
         for item in final.evidence:
+            status = (
+                "citation verified" if item.status.value in {"citation_verified", "valid"}
+                else item.status.value
+            )
             typer.echo(
                 f"- {item.path}:{item.line_start}-{item.line_end} "
-                f"[{item.status.value}] {item.explanation}"
+                f"[{status}] {item.explanation}"
             )
 
 
@@ -190,6 +199,12 @@ async def execute_deliberation(
         if mode is TransparencyMode.EXPERT:
             render_expert_calls(database.get_run(outcome.final.run_id))
         typer.echo(f"\nDecision record: {outcome.decision_id}")
+        if outcome.final.needs_human_resolution:
+            typer.echo(
+                "Resolve it with `ego decisions choose "
+                f"{outcome.decision_id} <number>` or record your own conclusion with "
+                f"`ego decisions decide {outcome.decision_id} \"<decision>\"`."
+            )
 
 
 @app.command()
@@ -347,6 +362,8 @@ def transition(decision_id: str, state: str, note: str | None) -> None:
         database.transition_decision(decision_id, state, note)  # type: ignore[arg-type]
     except KeyError as error:
         raise typer.BadParameter(f"unknown decision: {decision_id}") from error
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     typer.echo(f"Decision {decision_id} is now {state}.")
 
 
@@ -365,6 +382,48 @@ def defer_decision(decision_id: str, note: Annotated[str | None, typer.Option()]
     transition(decision_id, "deferred", note)
 
 
+@decisions_app.command("choose")
+def choose_decision(
+    decision_id: str,
+    alternative: Annotated[int, typer.Argument(help="One-based alternative number.")],
+    note: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Resolve a contested result by accepting one model alternative."""
+    _, database, _ = services()
+    try:
+        resolution = database.resolve_decision(
+            decision_id, alternative_index=alternative, note=note
+        )
+    except KeyError as error:
+        raise typer.BadParameter(f"unknown decision: {decision_id}") from error
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        f"Decision {decision_id} accepted alternative {alternative}:\n"
+        f"{resolution['recommendation']}"
+    )
+
+
+@decisions_app.command("decide")
+def decide_decision(
+    decision_id: str,
+    decision: Annotated[str, typer.Argument(help="Human-authored final decision.")],
+    note: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Resolve a contested result with a human-authored decision."""
+    _, database, _ = services()
+    try:
+        resolution = database.resolve_decision(decision_id, custom_text=decision, note=note)
+    except KeyError as error:
+        raise typer.BadParameter(f"unknown decision: {decision_id}") from error
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(
+        f"Decision {decision_id} accepted with human resolution:\n"
+        f"{resolution['recommendation']}"
+    )
+
+
 @app.command()
 def show(
     decision_id: str,
@@ -381,6 +440,15 @@ def show(
         return
     typer.echo(f"Decision: {decision_id}\nState: {row['state']}")
     render_final(FinalDecision.model_validate(row["record"]), TransparencyMode.DISCUSSION)
+    if row["resolutions"]:
+        typer.echo("\nHuman resolution")
+        for resolution in row["resolutions"]:
+            source = (
+                f"alternative {resolution['alternative_index']}"
+                if resolution["resolution_type"] == "alternative"
+                else "custom decision"
+            )
+            typer.echo(f"- {source}: {resolution['recommendation']}")
     typer.echo("\nState history")
     for event in row["events"]:
         suffix = f" — {event['note']}" if event["note"] else ""

@@ -15,6 +15,14 @@ from ego.models import (
 )
 from ego.workspace import GitObservation, revalidate_evidence, validate_evidence
 
+SEMANTIC_VERIFICATION_WARNING = (
+    "Citation integrity was verified; semantic claims were not mechanically proven."
+)
+
+
+def citation_is_verified(evidence: Evidence) -> bool:
+    return evidence.status in {EvidenceStatus.CITATION_VERIFIED, EvidenceStatus.VALID}
+
 
 def validate_position(workspace: Path, position: Position) -> Position:
     arguments: list[Argument] = []
@@ -36,7 +44,7 @@ def validate_synthesis(workspace: Path, synthesis: Synthesis) -> Synthesis:
 
 
 def valid_evidence_count(evidence: list[Evidence]) -> int:
-    return sum(item.status is EvidenceStatus.VALID for item in evidence)
+    return sum(citation_is_verified(item) for item in evidence)
 
 
 def unique_evidence(evidence: Iterable[Evidence]) -> list[Evidence]:
@@ -60,7 +68,10 @@ def single_participant_final(run_id: str, position: Position) -> FinalDecision:
         confidence=Confidence.LOW,
         confidence_reason="Only one participant completed the deliberation.",
         evidence=evidence,
-        warnings=["This was an individual consultation, not a cross-model discussion."],
+        warnings=[
+            "This was an individual consultation, not a cross-model discussion.",
+            SEMANTIC_VERIFICATION_WARNING,
+        ],
     )
 
 
@@ -115,7 +126,11 @@ def contested_final(
         confidence=Confidence.LOW,
         confidence_reason="The rotating synthesizers did not recognize equivalent conclusions.",
         evidence=unique_evidence(value for item in syntheses for value in item.evidence),
-        warnings=["Ego preserved competing recommendations instead of voting."],
+        warnings=[
+            "Ego preserved competing recommendations instead of voting.",
+            SEMANTIC_VERIFICATION_WARNING,
+        ],
+        requires_human_resolution=True,
     )
 
 
@@ -132,7 +147,7 @@ def revalidate_final(workspace: Path, final: FinalDecision) -> FinalDecision:
     if invalid:
         warnings.append(f"{len(invalid)} citation(s) could not be validated.")
     if any(item.critical for item in stale + invalid) or (
-        evidence and not any(item.status is EvidenceStatus.VALID for item in evidence)
+        evidence and not any(citation_is_verified(item) for item in evidence)
     ):
         status = RunStatus.INCONCLUSIVE
         confidence = Confidence.LOW

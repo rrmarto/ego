@@ -122,6 +122,12 @@ Screen {
     padding-right: 1;
 }
 
+#main-scroll {
+    width: 100%;
+    height: 1fr;
+    scrollbar-color: $ego-purple;
+}
+
 #side-column {
     width: 36;
     padding-left: 1;
@@ -144,6 +150,11 @@ Screen {
     height: 1;
 }
 
+.panel-rule {
+    height: 1;
+    border-top: solid $ego-border;
+}
+
 #active-brand-row {
     width: 100%;
     height: 6;
@@ -152,7 +163,7 @@ Screen {
 }
 
 #active-brand {
-    width: 42;
+    width: 11fr;
     height: 6;
     color: #aaa5e8;
     text-style: bold;
@@ -160,7 +171,7 @@ Screen {
 }
 
 #active-tagline {
-    width: 38;
+    width: 10fr;
     height: 6;
     color: $ego-yellow;
     text-style: bold;
@@ -185,23 +196,161 @@ Screen {
 }
 
 #timeline {
-    height: 1fr;
+    height: auto;
     min-height: 8;
     padding: 1 2;
     background: $ego-background;
     border: solid $ego-border;
-    scrollbar-color: $ego-purple;
+}
+
+.timeline-message, .timeline-event, .timeline-results {
+    width: 100%;
+    height: auto;
+}
+
+.timeline-event-spaced {
+    margin-top: 1;
+}
+
+.timeline-results {
+    color: $ego-muted;
+}
+
+.reasoning-card {
+    width: 100%;
+    height: auto;
+    margin: 1 0 0 11;
+    padding: 0 1;
+    background: $ego-background;
+    border-left: solid $ego-purple;
+}
+
+.reasoning-card CollapsibleTitle {
+    color: #d8deea;
+    text-style: bold;
+}
+
+.reasoning-card CollapsibleTitle:focus {
+    background: $ego-surface;
+    color: $ego-yellow;
+}
+
+.reasoning-card Markdown {
+    height: auto;
+    padding: 0 1 1 2;
+    color: #bbc4d5;
+}
+
+.revision-card {
+    border-left: solid $ego-purple;
+}
+
+.synthesis-card {
+    border-left: solid #4cc9f0;
+}
+
+.reconciliation-card {
+    border-left: solid $ego-green;
 }
 
 #result {
     display: none;
     height: auto;
-    max-height: 45%;
     margin-top: 1;
     padding: 1 2;
     background: $ego-background;
     border: solid $ego-purple;
-    overflow-y: auto;
+}
+
+#resolution-panel {
+    display: none;
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    padding: 1 2;
+    background: $ego-background;
+    border: solid $ego-yellow;
+}
+
+#resolution-message {
+    width: 100%;
+    height: auto;
+    color: #bbc4d5;
+}
+
+#resolution-actions {
+    width: 100%;
+    height: 3;
+    margin-top: 1;
+}
+
+#resolution-actions Button {
+    min-width: 12;
+    height: 3;
+    margin-right: 1;
+    background: $ego-background;
+    border: solid $ego-border;
+}
+
+#resolution-actions Button:focus {
+    border: solid $ego-yellow;
+    color: $ego-yellow;
+}
+
+#resolution-actions .action-accept {
+    background: $ego-green;
+    border: solid $ego-green;
+    color: $ego-background;
+    text-style: bold;
+}
+
+#resolution-actions .action-accept:focus {
+    background: #68e788;
+    border: solid $ego-yellow;
+    color: $ego-background;
+}
+
+#resolution-actions .action-reject {
+    background: #c94f5d;
+    border: solid #c94f5d;
+    color: white;
+    text-style: bold;
+}
+
+#resolution-actions .action-reject:focus {
+    background: #e06a76;
+    border: solid $ego-yellow;
+    color: white;
+}
+
+#resolution-actions .action-defer {
+    height: 3;
+    background: #367db7;
+    border: solid #367db7;
+    color: white;
+    text-style: bold;
+}
+
+#resolution-actions .action-defer:focus {
+    background: #5198cf;
+    border: solid $ego-yellow;
+    color: white;
+}
+
+.decision-ready #task-card {
+    display: none;
+}
+
+.decision-ready #timeline {
+    min-height: 8;
+}
+
+.decision-resolved #resolution-panel {
+    padding: 0 2;
+}
+
+.decision-resolved #timeline {
+    min-height: 12;
 }
 
 .panel-title {
@@ -209,7 +358,7 @@ Screen {
 }
 
 #session-summary {
-    height: 5;
+    height: auto;
     color: $ego-muted;
 }
 
@@ -350,4 +499,8 @@ Screen {
 .narrow #session-strip {
     height: 2;
     padding: 0 1;
+}
+
+.narrow .reasoning-card {
+    margin-left: 1;
 }
