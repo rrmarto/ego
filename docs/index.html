@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Mapa técnico de Ego: desde la TUI y los participantes locales hasta el protocolo de deliberación, la seguridad, la evidencia y el registro de decisiones."
+    />
+    <meta name="theme-color" content="#070a11" />
+    <title>Ego — Architecture Map</title>
+    <link rel="stylesheet" href="assets/architecture.css" />
+    <script src="assets/architecture.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Saltar al contenido</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Ego Architecture Map, volver al inicio">
+        <span class="brand-mark" aria-hidden="true">EGO</span>
+        <span class="brand-copy">
+          <strong>Architecture Map</strong>
+          <span>v0.1.0 · implemented system</span>
+        </span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span aria-hidden="true">☰</span>
+        <span class="sr-only">Abrir navegación</span>
+      </button>
+      <nav id="site-nav" class="site-nav" aria-label="Navegación principal">
+        <a href="#system">Sistema</a>
+        <a href="#protocol">Protocolo</a>
+        <a href="#decision">Decisión</a>
+        <a href="#safety">Seguridad</a>
+        <a href="#data">Datos</a>
+        <a href="#source">Código</a>
+      </nav>
+    </header>
+
+    <main id="content">
+      <section id="top" class="hero section-shell">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow"><span>TECHNICAL REFERENCE</span> / EGO CLI V0.1.0</p>
+            <h1>Arquitectura de <em>Ego CLI</em></h1>
+            <p class="hero-lede">
+              Ego es una herramienta local de apoyo a decisiones técnicas. Ejecuta varios CLI de IA
+              instalados y autenticados en el equipo, coordina una revisión estructurada entre ellos
+              y guarda tanto el resultado como la resolución humana. Esta página documenta los
+              componentes, límites y flujos implementados en la versión actual.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#system">Explorar el sistema</a>
+              <a
+                class="button button-secondary"
+                href="https://github.com/rrmarto/ego"
+                rel="noreferrer"
+              >Ver repositorio <span aria-hidden="true">↗</span></a>
+            </div>
+          </div>
+
+          <div class="hero-terminal" aria-label="Resumen del flujo principal de Ego">
+            <div class="terminal-bar">
+              <span class="terminal-dot dot-red"></span>
+              <span class="terminal-dot dot-yellow"></span>
+              <span class="terminal-dot dot-green"></span>
+              <span class="terminal-title">ego / decision pipeline</span>
+            </div>
+            <div class="terminal-body">
+              <p><span class="prompt">›</span> ego</p>
+              <p class="terminal-muted">workspace · direct access · enforced read-only</p>
+              <div class="terminal-rule"></div>
+              <p><span class="phase-ok">01</span> independent positions</p>
+              <p><span class="phase-ok">02</span> adversarial peer review</p>
+              <p><span class="phase-ok">03</span> position revision</p>
+              <p><span class="phase-ok">04</span> rotating cross-synthesis</p>
+              <p><span class="phase-warn">05</span> reconciliation</p>
+              <div class="terminal-rule"></div>
+              <p><span class="prompt">◆</span> <strong>completed | contested | inconclusive</strong></p>
+              <p class="terminal-muted">human resolution stored as a separate record</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="system-facts" aria-label="Principios clave">
+          <div><strong>5</strong><span>fases del protocolo</span></div>
+          <div><strong>4</strong><span>adaptadores soportados</span></div>
+          <div><strong>RO</strong><span>workspace de solo lectura</span></div>
+          <div><strong>SQL</strong><span>registro auditable local</span></div>
+        </div>
+      </section>
+
+      <section id="system" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">01 / SYSTEM MAP</p>
+            <h2>Componentes y límites del sistema</h2>
+          </div>
+          <p>
+            Las interfaces interactivas y automatizadas comparten el mismo harness. El harness
+            contiene el protocolo de deliberación, los contratos de los participantes, la ejecución
+            protegida y el registro auditable. Los CLI externos y el workspace quedan fuera de ese
+            límite y solo se accede a ellos mediante adaptadores controlados.
+          </p>
+        </div>
+
+        <div class="lens-controls" aria-label="Filtrar el mapa por responsabilidad">
+          <span>Enfocar:</span>
+          <button type="button" class="lens-button is-active" data-lens="all" aria-pressed="true">
+            Todo
+          </button>
+          <button type="button" class="lens-button" data-lens="interface" aria-pressed="false">
+            Interfaz
+          </button>
+          <button type="button" class="lens-button" data-lens="decision" aria-pressed="false">
+            Decisión
+          </button>
+          <button type="button" class="lens-button" data-lens="safety" aria-pressed="false">
+            Seguridad
+          </button>
+          <button type="button" class="lens-button" data-lens="data" aria-pressed="false">
+            Datos
+          </button>
+        </div>
+
+        <div class="architecture-map" aria-label="Límites y componentes de la arquitectura de Ego">
+          <div class="architecture-zone interface-zone" data-lenses="interface">
+            <div class="zone-heading">
+              <div><span>OUTSIDE HARNESS</span><strong>Interfaces de entrada</strong></div>
+              <p>Inician runs y presentan resultados; no implementan el protocolo.</p>
+            </div>
+            <div class="layer-nodes">
+              <article class="architecture-node accent-purple">
+                <span class="node-kicker">DEFAULT INTERACTIVE</span>
+                <h3>Textual TUI</h3>
+                <p>Interfaz principal para iniciar consultas, seguir eventos y registrar la resolución humana.</p>
+                <code>tui/EgoApp · views · timeline</code>
+              </article>
+              <article class="architecture-node accent-blue">
+                <span class="node-kicker">AUTOMATION</span>
+                <h3>Typer CLI</h3>
+                <p>Superficie no interactiva para scripts, diagnósticos, consultas e historial de decisiones.</p>
+                <code>cli.py</code>
+              </article>
+              <article class="architecture-node accent-muted">
+                <span class="node-kicker">LEGACY INTERFACE</span>
+                <h3>Line shell</h3>
+                <p>REPL anterior conservado como módulo aislado; ya no es el punto de entrada predeterminado.</p>
+                <code>shell.py</code>
+              </article>
+            </div>
+          </div>
+
+          <div class="layer-connector harness-connector" aria-hidden="true">
+            <span>Deliberation request / committed events</span>
+          </div>
+
+          <div class="harness-boundary" data-lenses="decision safety data">
+            <div class="harness-heading">
+              <div>
+                <span>CORE APPLICATION BOUNDARY</span>
+                <h3>Ego Harness</h3>
+              </div>
+              <p>
+                Coordina el protocolo, valida las respuestas y controla toda interacción con
+                procesos externos. Las interfaces dependen de este límite, no de un proveedor.
+              </p>
+            </div>
+
+            <div class="harness-stack">
+              <div class="architecture-layer harness-layer" data-lenses="decision">
+                <div class="layer-label"><span>H1</span> Protocolo</div>
+                <div class="layer-nodes">
+                  <article class="architecture-node accent-yellow">
+                    <span class="node-kicker">ORCHESTRATION</span>
+                    <h3>DeliberationEngine</h3>
+                    <p>Ejecuta las barreras de fase, gestiona fallos parciales y selecciona sintetizadores rotativos.</p>
+                    <code>deliberation/engine.py</code>
+                  </article>
+                  <article class="architecture-node accent-purple">
+                    <span class="node-kicker">DOMAIN CONTRACTS</span>
+                    <h3>Requests + results</h3>
+                    <p>Define Position, PeerReviewBundle, Synthesis, FinalDecision y métricas de uso.</p>
+                    <code>models.py</code>
+                  </article>
+                  <article class="architecture-node accent-green">
+                    <span class="node-kicker">OUTCOME RULES</span>
+                    <h3>Finalization</h3>
+                    <p>Genera estados finales, limita la confianza y aplica las reglas de resolución humana.</p>
+                    <code>deliberation/finalization.py</code>
+                  </article>
+                </div>
+              </div>
+
+              <div class="architecture-layer harness-layer" data-lenses="decision safety">
+                <div class="layer-label"><span>H2</span> Participantes</div>
+                <div class="layer-nodes">
+                  <article class="architecture-node accent-cyan">
+                    <span class="node-kicker">PROVIDER ABSTRACTION</span>
+                    <h3>Participant protocol</h3>
+                    <p>Expone probe y respond; los detalles de cada CLI permanecen dentro de su adaptador.</p>
+                    <code>participants/base.py · adapters</code>
+                  </article>
+                  <article class="architecture-node accent-orange">
+                    <span class="node-kicker">PHASE INPUT</span>
+                    <h3>Prompts + schemas</h3>
+                    <p>Construye el contexto de cada fase, restringe herramientas y valida el JSON recibido.</p>
+                    <code>prompts.py</code>
+                  </article>
+                  <article class="architecture-node accent-red">
+                    <span class="node-kicker">PROCESS CONTROL</span>
+                    <h3>Runner + Seatbelt</h3>
+                    <p>Aplica el entorno permitido, solo lectura, timeout y límite de salida de cada proceso.</p>
+                    <code>runner.py · sandbox.py</code>
+                  </article>
+                </div>
+              </div>
+
+              <div class="architecture-layer harness-layer" data-lenses="data safety">
+                <div class="layer-label"><span>H3</span> Evidencia y auditoría</div>
+                <div class="layer-nodes">
+                  <article class="architecture-node accent-blue">
+                    <span class="node-kicker">EVIDENCE CONTROL</span>
+                    <h3>Workspace validator</h3>
+                    <p>Restringe rutas al workspace, calcula hashes y detecta cambios durante el run.</p>
+                    <code>workspace.py</code>
+                  </article>
+                  <article class="architecture-node accent-cyan">
+                    <span class="node-kicker">LIVE DELIVERY</span>
+                    <h3>Committed events</h3>
+                    <p>Publica eventos en memoria después del commit para actualizar interfaces en tiempo real.</p>
+                    <code>events.py</code>
+                  </article>
+                  <article class="architecture-node accent-green">
+                    <span class="node-kicker">STORAGE GATEWAY</span>
+                    <h3>Database</h3>
+                    <p>Persiste runs, calls, eventos, decisiones y resoluciones mediante una única API.</p>
+                    <code>storage/database.py</code>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="layer-connector" aria-hidden="true"><span>Controlled local I/O</span></div>
+
+          <div class="architecture-zone resource-zone" data-lenses="decision safety data">
+            <div class="zone-heading">
+              <div><span>OUTSIDE HARNESS</span><strong>Recursos locales</strong></div>
+              <p>El acceso a estos recursos se realiza únicamente mediante adaptadores y servicios del harness.</p>
+            </div>
+            <div class="layer-nodes">
+              <article class="architecture-node accent-cyan">
+                <span class="node-kicker">EXTERNAL PROCESSES</span>
+                <h3>Provider CLIs</h3>
+                <p>Codex, Claude, Gemini y Copilot instalados y autenticados por cada usuario.</p>
+                <code>local binaries</code>
+              </article>
+              <article class="architecture-node accent-red">
+                <span class="node-kicker">READ-ONLY INPUT</span>
+                <h3>Target workspace</h3>
+                <p>Repositorio real inspeccionado en su ubicación original bajo la frontera de Seatbelt.</p>
+                <code>user-selected path</code>
+              </article>
+              <article class="architecture-node accent-green">
+                <span class="node-kicker">LOCAL STATE</span>
+                <h3>SQLite + raw files</h3>
+                <p>Registro auditable, historial append-only y salida redactada con retención limitada.</p>
+                <code>platform data directory</code>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="runtime" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">02 / RUNTIME</p>
+            <h2>Flujo de ejecución de una consulta</h2>
+          </div>
+          <p>
+            La TUI y los comandos no interactúan directamente con los modelos. Ambos crean una
+            solicitud para el harness, que persiste el run antes de comprobar participantes y
+            comenzar el protocolo.
+          </p>
+        </div>
+
+        <ol class="runtime-flow">
+          <li>
+            <span class="flow-number">00</span>
+            <div><strong>Entrada</strong><p>La interfaz interpreta texto normal como consulta y reserva el prefijo <code>/</code> para comandos.</p></div>
+          </li>
+          <li>
+            <span class="flow-number">01</span>
+            <div><strong>Creación del run</strong><p>Se normaliza la ruta del workspace, se registra el estado Git inicial y se crea el run en SQLite.</p></div>
+          </li>
+          <li>
+            <span class="flow-number">02</span>
+            <div><strong>Comprobaciones previas</strong><p>Se verifican binario, versión, opciones requeridas, autenticación y protección Seatbelt.</p></div>
+          </li>
+          <li>
+            <span class="flow-number">03</span>
+            <div><strong>Deliberación</strong><p>El engine ejecuta los participantes en paralelo y espera a que cada fase termine antes de iniciar la siguiente.</p></div>
+          </li>
+          <li>
+            <span class="flow-number">04</span>
+            <div><strong>Finalización</strong><p>Se revalidan las citas, se compara el estado Git final y se crea el registro de decisión.</p></div>
+          </li>
+          <li>
+            <span class="flow-number">05</span>
+            <div><strong>Resolución humana</strong><p>La persona puede aceptar, elegir una alternativa, registrar su propia conclusión, diferir o rechazar.</p></div>
+          </li>
+        </ol>
+
+        <div class="commit-rule">
+          <div class="commit-step"><span>1</span><strong>Transaction</strong><small>actualiza estado + agrega evento</small></div>
+          <span class="commit-arrow" aria-hidden="true">→</span>
+          <div class="commit-step"><span>2</span><strong>SQLite commit</strong><small>fuente de verdad durable</small></div>
+          <span class="commit-arrow" aria-hidden="true">→</span>
+          <div class="commit-step"><span>3</span><strong>Async publish</strong><small>cola en memoria opcional</small></div>
+          <span class="commit-arrow" aria-hidden="true">→</span>
+          <div class="commit-step"><span>4</span><strong>TUI render</strong><small>timeline y paneles reactivos</small></div>
+        </div>
+        <p class="annotation">Los eventos se publican a la TUI únicamente después de confirmar la transacción.</p>
+      </section>
+
+      <section id="protocol" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">03 / DELIBERATION PROTOCOL</p>
+            <h2>Protocolo de deliberación</h2>
+          </div>
+          <p>
+            El engine organiza cinco barreras de fase. Cada fase define el contexto disponible, el
+            schema de salida y si el participante puede leer archivos. Todos los participantes
+            mantienen la misma autoridad y la pareja sintetizadora rota en cada run.
+          </p>
+        </div>
+
+        <div class="phase-rail">
+          <article class="phase-card phase-yellow">
+            <div class="phase-index">01</div>
+            <p class="phase-type">POSITION</p>
+            <h3>Independent reasoning</h3>
+            <p>Cada participante analiza la misma pregunta y puede inspeccionar el workspace sin recibir posiciones ajenas.</p>
+            <dl><div><dt>Lee archivos</dt><dd>Sí</dd></div><div><dt>Produce</dt><dd>Position</dd></div></dl>
+          </article>
+          <article class="phase-card phase-cyan">
+            <div class="phase-index">02</div>
+            <p class="phase-type">CHALLENGE</p>
+            <h3>Peer review</h3>
+            <p>Cada participante recibe las posiciones ajenas para identificar errores, supuestos y evidencia faltante.</p>
+            <dl><div><dt>Lee archivos</dt><dd>Sí</dd></div><div><dt>Produce</dt><dd>PeerReviewBundle</dd></div></dl>
+          </article>
+          <article class="phase-card phase-purple">
+            <div class="phase-index">03</div>
+            <p class="phase-type">UPDATE</p>
+            <h3>Position revision</h3>
+            <p>Cada participante actualiza o mantiene su posición usando las revisiones estructuradas recibidas.</p>
+            <dl><div><dt>Lee archivos</dt><dd>No</dd></div><div><dt>Produce</dt><dd>Position</dd></div></dl>
+          </article>
+          <article class="phase-card phase-orange">
+            <div class="phase-index">04</div>
+            <p class="phase-type">COMBINE</p>
+            <h3>Cross synthesis</h3>
+            <p>Dos participantes seleccionados de forma rotativa generan síntesis independientes a partir de las posiciones revisadas.</p>
+            <dl><div><dt>Lee archivos</dt><dd>No</dd></div><div><dt>Produce</dt><dd>Synthesis × 2</dd></div></dl>
+          </article>
+          <article class="phase-card phase-green">
+            <div class="phase-index">05</div>
+            <p class="phase-type">COMPARE</p>
+            <h3>Reconciliation</h3>
+            <p>Los dos sintetizadores comparan ambas propuestas y declaran si son materialmente equivalentes.</p>
+            <dl><div><dt>Lee archivos</dt><dd>No</dd></div><div><dt>Produce</dt><dd>Synthesis × 2</dd></div></dl>
+          </article>
+        </div>
+
+        <div class="protocol-notes">
+          <details open>
+            <summary>Qué se valida en cada respuesta</summary>
+            <div class="details-content">
+              <p>
+                Cada respuesta debe cumplir el schema correspondiente. Las revisiones requieren una
+                explicación suficiente; las síntesis deben referenciar argumentos existentes; y la
+                reconciliación debe declarar explícitamente equivalencia o conflicto.
+              </p>
+              <p>
+                Una respuesta inválida recibe un intento correctivo con el error de validación. Un
+                segundo fallo cierra el turno como fallido y el resultado se degrada según las
+                respuestas que sigan disponibles.
+              </p>
+            </div>
+          </details>
+          <details>
+            <summary>Qué razonamiento puede consultar la persona</summary>
+            <div class="details-content">
+              <p>
+                La timeline permite consultar posiciones independientes, revisiones, síntesis y
+                reconciliaciones normalizadas. No muestra razonamiento privado ni la salida cruda del
+                proveedor. Las revisiones individuales entre modelos se conservan en el registro, pero
+                no se incluyen en la vista predeterminada.
+              </p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section id="decision" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">04 / DECISION LOGIC</p>
+            <h2>Estados y reglas de finalización</h2>
+          </div>
+          <p>
+            El estado final depende del número de respuestas válidas, del resultado de la
+            reconciliación y de la vigencia de la evidencia. El acuerdo entre modelos no eleva por sí
+            solo la confianza por encima de <em>moderate</em>.
+          </p>
+        </div>
+
+        <div class="decision-tree">
+          <div class="tree-root">
+            <span class="tree-label">AFTER PROBES</span>
+            <strong>¿Cuántos participantes completan una posición?</strong>
+          </div>
+          <div class="tree-trunk" aria-hidden="true"></div>
+          <div class="tree-branches tree-branches-three">
+            <article class="outcome-card outcome-failed">
+              <span class="outcome-count">0</span>
+              <h3>Failed</h3>
+              <p>Ningún participante completó una posición válida; el run termina sin recomendación.</p>
+            </article>
+            <article class="outcome-card outcome-low">
+              <span class="outcome-count">1</span>
+              <h3>Completed · low</h3>
+              <p>La posición se conserva con confianza baja y una advertencia de consulta individual.</p>
+            </article>
+            <article class="outcome-card outcome-continue">
+              <span class="outcome-count">2+</span>
+              <h3>Continúa</h3>
+              <p>El run continúa con revisión cruzada, actualización de posiciones, síntesis y reconciliación.</p>
+            </article>
+          </div>
+
+          <div class="tree-question">
+            <span class="tree-label">RECONCILIATION</span>
+            <strong>¿Dos reconciliaciones válidas reconocen equivalencia material?</strong>
+          </div>
+          <div class="tree-branches tree-branches-two">
+            <article class="outcome-card outcome-completed">
+              <span class="status-pill">YES</span>
+              <h3>Completed · moderate max</h3>
+              <p>
+                Se usa como base la síntesis con mayor cantidad de evidencia válida. El resultado se
+                guarda como completado y la confianza máxima permanece en <em>moderate</em>.
+              </p>
+            </article>
+            <article class="outcome-card outcome-contested">
+              <span class="status-pill">NO / UNKNOWN</span>
+              <h3>Contested · low</h3>
+              <p>
+                Las propuestas se guardan como alternativas junto con sus conflictos. El registro
+                queda pendiente de una resolución humana y no se aplica una votación automática.
+              </p>
+            </article>
+          </div>
+
+          <div class="tree-question tree-question-secondary">
+            <span class="tree-label">FAILURE PATH</span>
+            <strong>¿La síntesis queda incompleta o la evidencia crítica cambia?</strong>
+          </div>
+          <div class="inconclusive-band">
+            <span class="status-pill">INCONCLUSIVE</span>
+            <p>
+              El resultado pasa a <em>inconclusive</em> cuando no se completan dos síntesis o cuando
+              la revalidación detecta evidencia crítica obsoleta o inválida. También se aplica si un
+              resultado con citas deja de conservar al menos una cita válida.
+            </p>
+          </div>
+        </div>
+
+        <div class="human-loop">
+          <div class="human-loop-copy">
+            <p class="eyebrow">HUMAN RESOLUTION</p>
+            <h3>Resolución humana de resultados</h3>
+            <p>
+              La resolución se guarda como un registro adicional y no modifica el resultado generado
+              por los modelos. Para un resultado <em>contested</em>, aceptar requiere seleccionar una
+              alternativa o registrar una conclusión propia; deferir y rechazar siguen disponibles.
+            </p>
+          </div>
+          <div class="human-actions" aria-label="Acciones humanas disponibles">
+            <div class="human-action action-green"><code>/choose N</code><span>Aceptar alternativa</span></div>
+            <div class="human-action action-green"><code>/decide TEXT</code><span>Conclusión propia</span></div>
+            <div class="human-action action-blue"><code>/defer</code><span>Esperar evidencia</span></div>
+            <div class="human-action action-red"><code>/reject</code><span>Rechazar resultado</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="safety" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">05 / SAFETY BOUNDARY</p>
+            <h2>Modelo de ejecución de solo lectura</h2>
+          </div>
+          <p>
+            Los participantes inspeccionan el workspace en su ubicación real. Ego exige una prueba
+            funcional de Seatbelt antes de ejecutar cualquier modelo y rechaza el participante si no
+            puede confirmar que las lecturas funcionan y las escrituras están bloqueadas.
+          </p>
+        </div>
+
+        <div class="safety-shell">
+          <div class="safety-workspace">
+            <span class="safety-icon" aria-hidden="true">⌂</span>
+            <p class="node-kicker">TARGET WORKSPACE</p>
+            <h3>Real directory</h3>
+              <p>Lecturas y búsquedas permitidas; modificaciones denegadas.</p>
+            <strong>file-write* denied</strong>
+          </div>
+          <div class="safety-walls">
+            <article>
+              <span>WALL 01</span>
+              <h3>Provider-native controls</h3>
+              <p>Cada adaptador activa los modos de planificación o solo lectura disponibles en su CLI.</p>
+            </article>
+            <article>
+              <span>WALL 02</span>
+              <h3>External macOS Seatbelt</h3>
+              <p>Todas las llamadas se envuelven con un perfil que niega escrituras en el workspace.</p>
+            </article>
+            <article>
+              <span>WALL 03</span>
+              <h3>Process constraints</h3>
+              <p>El proceso recibe variables allowlist, timeout, límite de salida y captura separada de stdout/stderr.</p>
+            </article>
+          </div>
+        </div>
+
+        <div class="codex-exception">
+          <div class="exception-mark">CODEX<br />ONLY</div>
+          <div>
+            <p class="node-kicker">DOCUMENTED EXTERNAL-SANDBOX VARIANT</p>
+            <h3>Compatibilidad de Codex con el sandbox externo</h3>
+            <p>
+              El sandbox interno de Codex no puede anidarse dentro del Seatbelt aplicado por Ego. Su
+              adaptador declara <code>requires_external_sandbox</code> y activa el modo externo del
+              CLI. El runner comprueba que la llamada siga envuelta por Seatbelt y añade protección de
+              escritura para las ubicaciones durables del usuario y del sistema.
+            </p>
+            <ul>
+              <li><code>CODEX_HOME</code> temporal y aislado por llamada.</li>
+              <li>Copia privada <code>0600</code> de <code>auth.json</code>; se elimina al finalizar.</li>
+              <li>Configuración, sesiones, memoria, apps, browser y multi-agent desactivados.</li>
+              <li>Solo recibe sus propias credenciales; nunca variables de otros proveedores.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="provider-grid">
+          <article><span class="provider-dot codex-dot"></span><h3>Codex</h3><p>External-only Seatbelt · JSON schema · uso reportado</p></article>
+          <article><span class="provider-dot claude-dot"></span><h3>Claude</h3><p>Safe/plan mode · tools por fase · tokens + coste</p></article>
+          <article><span class="provider-dot gemini-dot"></span><h3>Gemini</h3><p>Approval plan · salida JSON · entorno filtrado</p></article>
+          <article><span class="provider-dot copilot-dot"></span><h3>Copilot</h3><p>Shell/write/url/memory denegados · sin preguntas</p></article>
+        </div>
+      </section>
+
+      <section id="evidence" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">06 / EVIDENCE CONTRACT</p>
+            <h2>Alcance de la validación de evidencia</h2>
+          </div>
+          <p>
+            La validación confirma que la ruta, el rango de líneas y los hashes corresponden al
+            workspace inspeccionado. No verifica automáticamente que la explicación del modelo sea
+            una interpretación correcta del código.
+          </p>
+        </div>
+
+        <div class="evidence-grid">
+          <article class="evidence-card">
+            <span class="evidence-step">01</span><h3>Path boundary</h3>
+            <p>La ruta se normaliza y debe quedar dentro del workspace seleccionado.</p>
+          </article>
+          <article class="evidence-card">
+            <span class="evidence-step">02</span><h3>Exact lines</h3>
+            <p>El rango indicado debe existir y se extrae exactamente para calcular su hash.</p>
+          </article>
+          <article class="evidence-card">
+            <span class="evidence-step">03</span><h3>Two hashes</h3>
+            <p>El registro incluye SHA-256 del archivo completo y del fragmento citado.</p>
+          </article>
+          <article class="evidence-card">
+            <span class="evidence-step">04</span><h3>Final revalidation</h3>
+            <p>Las citas y el estado Git se comparan nuevamente antes de crear la decisión.</p>
+          </article>
+        </div>
+
+        <div class="verification-boundary">
+          <div class="verified-zone">
+            <p class="node-kicker">EGO CAN VERIFY</p>
+            <ul><li>Ruta</li><li>Rango de líneas</li><li>Hash del archivo</li><li>Hash del fragmento</li></ul>
+          </div>
+          <div class="boundary-line"><span>≠</span></div>
+          <div class="unverified-zone">
+            <p class="node-kicker">EGO DOES NOT PROVE</p>
+            <ul><li>Interpretación semántica</li><li>Ausencia total de riesgos</li><li>Verdad por consenso</li><li>Corrección futura</li></ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="data" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">07 / DATA &amp; OBSERVABILITY</p>
+            <h2>Persistencia y actualización de la TUI</h2>
+          </div>
+          <p>
+            SQLite mantiene el estado durable de runs y decisiones. Después de cada commit, una cola
+            asíncrona opcional entrega el mismo evento a la interfaz. El historial también puede
+            reconstruirse leyendo eventos ordenados por identificador.
+          </p>
+        </div>
+
+        <div class="data-layout">
+          <div class="schema-map">
+            <article class="schema-table table-primary">
+              <h3>runs</h3><p>pregunta · workspace · estado · Git start/end · final</p>
+            </article>
+            <article class="schema-table"><h3>run_participants</h3><p>estado · versión · modelo · motivo</p></article>
+            <article class="schema-table"><h3>calls</h3><p>fase · duración · modelo · tokens · coste · parsed JSON</p></article>
+            <article class="schema-table"><h3>events</h3><p>tipo · participante · payload · timestamp</p></article>
+            <article class="schema-table table-decision"><h3>decisions</h3><p>estado derivado · FinalDecision · supersedes</p></article>
+            <article class="schema-table"><h3>decision_events</h3><p>transición append-only · nota · timestamp</p></article>
+            <article class="schema-table"><h3>decision_resolutions</h3><p>alternativa o conclusión humana · nota</p></article>
+          </div>
+
+          <div class="tui-observer">
+            <p class="node-kicker">WHAT THE TUI PROJECTS</p>
+            <div class="mini-tui">
+              <div class="mini-header">EGO CLI · RUN · MODE · STATUS</div>
+              <div class="mini-main">
+                <div class="mini-timeline">
+                  <strong>DELIBERATION</strong>
+                  <span>◆ phase started</span>
+                  <span>› participant completed</span>
+                  <span>▾ expandable structured result</span>
+                  <span>✓ decision created</span>
+                </div>
+                <div class="mini-side">
+                  <span>SESSION</span><span>PARTICIPANTS</span><span>PROTOCOL 5/5</span>
+                </div>
+              </div>
+              <div class="mini-input">What decision do you want to examine next?</div>
+            </div>
+            <p>
+              El tiempo y las métricas de uso se actualizan desde eventos de llamadas completadas.
+              Tokens y costes se muestran únicamente cuando el CLI correspondiente los reporta.
+            </p>
+          </div>
+        </div>
+
+        <div class="event-catalog" aria-label="Catálogo de eventos persistidos">
+          <span>run_created</span><span>run_status_changed</span><span>participant_probe_started</span>
+          <span>participant_probe_completed</span><span>phase_started</span>
+          <span>participant_turn_started</span><span>participant_turn_completed</span>
+          <span>participant_turn_failed</span><span>phase_completed</span><span>decision_created</span>
+        </div>
+      </section>
+
+      <section id="source" class="section-shell section-block">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">08 / SOURCE MAP</p>
+            <h2>Relación entre módulos y responsabilidades</h2>
+          </div>
+          <p>
+            Estos módulos implementan los límites descritos en la página. Los ADRs registran las
+            decisiones que modificaron el comportamiento o las garantías del sistema.
+          </p>
+        </div>
+
+        <div class="source-grid">
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/tui/app.py">
+            <span>INTERFACE</span><strong>tui/</strong><p>Composición, estado, timeline, comandos y presentación.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/deliberation/engine.py">
+            <span>ORCHESTRATION</span><strong>deliberation/</strong><p>Fases, paralelismo, síntesis, reconciliación y finalización.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/participants/base.py">
+            <span>PROVIDERS</span><strong>participants/</strong><p>Contrato común y adaptadores Codex, Claude, Gemini y Copilot.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/storage/database.py">
+            <span>TRUTH</span><strong>storage/</strong><p>Schema SQLite, eventos, calls, decisiones y retención.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/runner.py">
+            <span>EXECUTION</span><strong>runner.py</strong><p>Subprocesos limitados y entorno reducido.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/sandbox.py">
+            <span>SAFETY</span><strong>sandbox.py</strong><p>Perfil Seatbelt, wrapper y prueba fail-closed.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/workspace.py">
+            <span>EVIDENCE</span><strong>workspace.py</strong><p>Rutas, hashes, revalidación y observación Git.</p>
+          </a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/models.py">
+            <span>CONTRACTS</span><strong>models.py</strong><p>Tipos Pydantic compartidos por todo el sistema.</p>
+          </a>
+        </div>
+
+        <div class="adr-panel">
+          <div>
+            <p class="node-kicker">ACCEPTED ARCHITECTURE DECISIONS</p>
+            <h3>ADRs que sostienen este mapa</h3>
+          </div>
+          <ol>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0001-v1-boundaries.md">0001 · v1 boundaries</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0002-interactive-shell.md">0002 · interactive shell</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0003-realtime-observability.md">0003 · realtime observability</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0004-textual-tui.md">0004 · Textual TUI</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0005-codex-external-sandbox.md">0005 · Codex external sandbox</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0006-citation-scope-and-human-resolution.md">0006 · citation scope + human resolution</a></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="principles section-shell section-block" aria-labelledby="principles-title">
+        <p class="eyebrow">ARCHITECTURE REQUIREMENTS</p>
+        <h2 id="principles-title">Invariantes de la versión 1</h2>
+        <div class="principle-grid">
+          <article><span>01</span><p>Ego recomienda; nunca implementa.</p></article>
+          <article><span>02</span><p>El workspace real permanece read-only.</p></article>
+          <article><span>03</span><p>Todo participante debe pasar Seatbelt.</p></article>
+          <article><span>04</span><p>No hay roles ocultos ni sintetizador permanente.</p></article>
+          <article><span>05</span><p>El desacuerdo material se conserva.</p></article>
+          <article><span>06</span><p>Los cambios materiales producen eventos append-only.</p></article>
+          <article><span>07</span><p>Una cita válida no equivale a una afirmación probada.</p></article>
+          <article><span>08</span><p>La decisión humana no reescribe la salida del modelo.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <span class="footer-brand">EGO</span>
+        <p>Local multi-model decision support for software projects.</p>
+      </div>
+      <div class="footer-meta">
+        <span>Architecture as implemented · v0.1.0</span>
+        <a href="#top">Volver arriba ↑</a>
+      </div>
+    </footer>
+  </body>
+</html>

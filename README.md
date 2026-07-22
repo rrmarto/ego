@@ -4,6 +4,11 @@ Ego asks multiple locally installed AI CLIs to examine a real directory in
 read-only mode, challenge one another, and produce an auditable decision record.
 It does not implement the recommendation.
 
+Explore the implemented system from the TUI through the deliberation harness,
+safety boundary, evidence validation, and human decision loop in the
+[visual architecture map](https://rrmarto.github.io/ego/). Its source lives in
+[`docs/index.html`](docs/index.html) and can be served directly with GitHub Pages.
+
 ## Install for development
 
 ```bash
