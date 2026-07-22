@@ -1,6 +1,7 @@
-$ego-background: #080c14;
-$ego-panel: #0d1320;
-$ego-border: #273044;
+$ego-background: #060a12;
+$ego-panel: #0b111c;
+$ego-surface: #101725;
+$ego-border: #2b3548;
 $ego-purple: #b67cff;
 $ego-yellow: #f4d35e;
 $ego-green: #42d66b;
@@ -9,11 +10,106 @@ $ego-muted: #7d8799;
 Screen {
     background: $ego-background;
     color: #d8deea;
+    align-horizontal: center;
 }
 
-Header {
-    background: #111722;
-    color: #d8deea;
+#welcome-view {
+    width: 108;
+    height: 1fr;
+    align: center middle;
+    padding: 1 3;
+}
+
+#welcome-hero {
+    height: 23;
+    margin-bottom: 1;
+    border-bottom: solid $ego-border;
+}
+
+#portrait {
+    width: 41;
+    height: 21;
+    color: $ego-yellow;
+    content-align: center middle;
+}
+
+#welcome-copy {
+    width: 1fr;
+    height: 21;
+    padding: 1 2;
+}
+
+#quote {
+    height: 5;
+    color: $ego-yellow;
+    text-style: bold;
+}
+
+#quote-author {
+    height: 2;
+    color: $ego-green;
+}
+
+#brand {
+    height: 7;
+    color: #aaa5e8;
+    text-style: bold;
+}
+
+#compact-brand {
+    display: none;
+    height: 2;
+    color: #aaa5e8;
+    text-style: bold;
+}
+
+#version {
+    height: 2;
+    color: $ego-purple;
+}
+
+#welcome-details {
+    height: 10;
+    border-top: solid $ego-border;
+    border-bottom: solid $ego-border;
+}
+
+.welcome-section {
+    width: 1fr;
+    padding: 1 2;
+}
+
+#welcome-participants {
+    border-left: solid $ego-border;
+}
+
+.section-title, .panel-title {
+    height: 2;
+    color: #94a5dc;
+    text-style: bold;
+}
+
+#command-list, #welcome-participant-list {
+    color: #bbc4d5;
+}
+
+#welcome-status {
+    height: 3;
+    color: $ego-muted;
+    text-align: center;
+    content-align: center middle;
+}
+
+#active-view {
+    display: none;
+    width: 100%;
+    height: 1fr;
+}
+
+#session-strip {
+    height: 3;
+    padding: 1 2 0 2;
+    border-bottom: solid $ego-border;
 }
 
 #workspace-grid {
@@ -28,23 +124,55 @@ Header {
 
 #side-column {
     width: 36;
-    background: $ego-panel;
-    border: solid $ego-border;
-    padding: 1 2;
+    padding-left: 1;
 }
 
-#brand {
-    height: 3;
-    color: $ego-purple;
+.side-panel {
+    width: 100%;
+    height: 1fr;
+    background: $ego-background;
+    border: solid $ego-border;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+#protocol-panel {
+    margin-bottom: 0;
+}
+
+.side-panel .panel-title {
+    height: 1;
+}
+
+#active-brand-row {
+    width: 100%;
+    height: 6;
+    margin-bottom: 1;
+    align: center middle;
+}
+
+#active-brand {
+    width: 42;
+    height: 6;
+    color: #aaa5e8;
     text-style: bold;
-    text-align: center;
     content-align: center middle;
 }
 
-#tagline {
-    height: 2;
+#active-tagline {
+    width: 38;
+    height: 6;
     color: $ego-yellow;
-    text-align: center;
+    text-style: bold;
+    content-align: center middle;
+}
+
+#active-compact-brand {
+    display: none;
+    height: 2;
+    color: #aaa5e8;
+    text-style: bold;
+    content-align: center middle;
 }
 
 #task-card {
@@ -52,15 +180,15 @@ Header {
     min-height: 4;
     margin-bottom: 1;
     padding: 1 2;
-    background: $ego-panel;
+    background: $ego-background;
     border: solid $ego-border;
 }
 
 #timeline {
     height: 1fr;
-    min-height: 10;
+    min-height: 8;
     padding: 1 2;
-    background: $ego-panel;
+    background: $ego-background;
     border: solid $ego-border;
     scrollbar-color: $ego-purple;
 }
@@ -71,16 +199,13 @@ Header {
     max-height: 45%;
     margin-top: 1;
     padding: 1 2;
-    background: #111722;
+    background: $ego-background;
     border: solid $ego-purple;
     overflow-y: auto;
 }
 
 .panel-title {
-    height: 2;
-    margin-top: 1;
-    color: #8fa0d8;
-    text-style: bold;
+    margin-top: 0;
 }
 
 #session-summary {
@@ -89,33 +214,140 @@ Header {
 }
 
 #participant-list {
-    height: 1fr;
-    min-height: 12;
+    height: auto;
+    min-height: 6;
+    max-height: 16;
 }
 
 #phase-progress {
-    height: 2;
+    height: 1;
     color: $ego-green;
 }
 
 #phase-summary {
-    height: 2;
+    height: 1;
     color: $ego-muted;
 }
 
-#question-input {
+#protocol-list {
+    height: 5;
+    color: $ego-muted;
+}
+
+#bottom-bar {
     dock: bottom;
-    height: 3;
-    margin: 0 2 1 2;
+    width: 100%;
+    height: 6;
+    align-horizontal: center;
+}
+
+.question-input {
+    width: 100%;
+    max-width: 110;
+    height: 5;
     padding: 0 1;
-    background: #090d16;
+    background: $ego-background;
     border: tall $ego-purple;
 }
 
-#question-input:focus {
+#question-input {
+    margin: 0 2 1 2;
+}
+
+#active-bottom-bar {
+    width: 100%;
+    height: 6;
+    padding-top: 1;
+    align-horizontal: left;
+}
+
+#active-question-input {
+    max-width: 100%;
+    margin: 0;
+}
+
+.question-input:focus {
     border: tall $ego-yellow;
 }
 
-Footer {
-    background: #111722;
+.question-input:disabled {
+    color: $ego-muted;
+    border: tall $ego-border;
+}
+
+.narrow #welcome-view {
+    width: 100%;
+    padding: 0 2;
+}
+
+.narrow #portrait {
+    display: none;
+}
+
+.narrow #welcome-copy {
+    height: 9;
+    padding: 0 1;
+}
+
+.narrow #welcome-hero {
+    height: 9;
+    margin-bottom: 0;
+}
+
+.narrow #quote {
+    height: 3;
+}
+
+.narrow #quote-author {
+    height: 1;
+}
+
+.narrow #brand {
+    display: none;
+}
+
+.narrow #compact-brand {
+    display: block;
+}
+
+.narrow #version {
+    height: 1;
+}
+
+.narrow #welcome-details {
+    height: 8;
+}
+
+.narrow .welcome-section {
+    padding: 0 1;
+}
+
+.narrow #welcome-status {
+    height: 2;
+}
+
+.narrow #side-column {
+    display: none;
+}
+
+.narrow #main-column {
+    width: 1fr;
+    padding-right: 0;
+}
+
+.narrow #active-brand-row {
+    height: 2;
+}
+
+.narrow #active-brand, .narrow #active-tagline {
+    display: none;
+}
+
+.narrow #active-compact-brand {
+    display: block;
+}
+
+.narrow #session-strip {
+    height: 2;
+    padding: 0 1;
 }

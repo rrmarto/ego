@@ -9,18 +9,28 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, Markdown, ProgressBar, RichLog, Static
+from textual.events import Resize
+from textual.widgets import Markdown, ProgressBar, Static
 from textual.worker import Worker
 
 from ego import __version__
 from ego.config import AppPaths, load_config
 from ego.deliberation import DeliberationEngine, DeliberationOutcome, NoParticipantsError
 from ego.events import DeliberationEvent, DeliberationEventStream, DeliberationEventType
-from ego.models import FinalDecision
 from ego.participants import Participant, build_participants
 from ego.storage import Database
+from ego.tui.input import QuestionInput
+from ego.tui.presentation import (
+    final_markdown,
+    participant_texts,
+    protocol_text,
+    session_strip,
+    session_summary,
+    welcome_status,
+)
 from ego.tui.state import PHASES, ParticipantState, SessionState
+from ego.tui.timeline import DeliberationTimeline
+from ego.tui.views import ActiveView, WelcomeQuestionBar, WelcomeView
 from ego.workspace import resolve_workspace
 
 
@@ -56,43 +66,32 @@ class EgoApp(App[None]):
         self.started_at: float | None = None
         self.turn_started_at: dict[str, float] = {}
         self.active_worker: Worker[None] | None = None
+        self.active_view = False
 
     @staticmethod
     def _pending_participant() -> ParticipantState:
         return ParticipantState()
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with Horizontal(id="workspace-grid"):
-            with Vertical(id="main-column"):
-                yield Static(f"E G O  ·  v{__version__}", id="brand")
-                yield Static(
-                    "Multiple perspectives. One auditable decision.", id="tagline"
-                )
-                yield Static("No active question", id="task-card")
-                yield RichLog(id="timeline", wrap=True, markup=False)
-                yield Markdown("", id="result")
-            with Vertical(id="side-column"):
-                yield Static("SESSION", classes="panel-title")
-                yield Static("Ready", id="session-summary")
-                yield Static("PARTICIPANTS", classes="panel-title")
-                yield Static("Checking local CLIs…", id="participant-list")
-                yield Static("PROTOCOL", classes="panel-title")
-                yield ProgressBar(total=len(PHASES), show_eta=False, id="phase-progress")
-                yield Static("Ready to deliberate", id="phase-summary")
-        yield Input(
-            placeholder="What decision do you want to examine?",
-            id="question-input",
-        )
-        yield Footer()
+        yield WelcomeView(id="welcome-view")
+        yield ActiveView(id="active-view")
+        yield WelcomeQuestionBar(id="bottom-bar")
 
     def on_mount(self) -> None:
-        self.query_one("#timeline", RichLog).write(
-            Text("Enter a question. Use /help for interactive commands.", style="dim")
+        self.query_one("#timeline", DeliberationTimeline).write_message(
+            "Enter a question. Use /help for interactive commands.", style="dim"
         )
         self.set_interval(1, self._update_elapsed)
+        self._set_responsive_class(self.size.width)
+        self._render_state()
         self.probe_participants()
         self.action_focus_question()
+
+    def on_resize(self, event: Resize) -> None:
+        self._set_responsive_class(event.size.width)
+
+    def _set_responsive_class(self, width: int) -> None:
+        self.screen.set_class(width < 96, "narrow")
 
     @work(exclusive=True, group="probe")
     async def probe_participants(self) -> None:
@@ -110,10 +109,10 @@ class EgoApp(App[None]):
                 state.detail = result.reason or result.version or result.status.value
         self._render_state()
 
-    @on(Input.Submitted, "#question-input")
-    def submit_question(self, event: Input.Submitted) -> None:
-        question = event.value.strip()
-        event.input.clear()
+    @on(QuestionInput.Submitted)
+    def submit_question(self, event: QuestionInput.Submitted) -> None:
+        question = event.question_input.text.strip()
+        event.question_input.clear()
         if not question:
             return
         if question.startswith("/"):
@@ -187,7 +186,9 @@ class EgoApp(App[None]):
             self.running = False
             self.started_at = None
             self.turn_started_at.clear()
-            self.query_one("#question-input", Input).disabled = False
+            question_input = self.query_one("#active-question-input", QuestionInput)
+            question_input.disabled = False
+            question_input.placeholder = "What decision do you want to examine next?"
             self.action_focus_question()
             self._render_state()
 
@@ -199,10 +200,9 @@ class EgoApp(App[None]):
             self._render_state()
             if event.event_type is DeliberationEventType.DECISION_CREATED:
                 return
-            if (
-                event.event_type is DeliberationEventType.RUN_STATUS_CHANGED
-                and event.payload.get("status") in {"failed", "interrupted"}
-            ):
+            if event.event_type is DeliberationEventType.RUN_STATUS_CHANGED and event.payload.get(
+                "status"
+            ) in {"failed", "interrupted"}:
                 return
 
     def _begin_run(self, question: str) -> None:
@@ -210,88 +210,73 @@ class EgoApp(App[None]):
         self.started_at = monotonic()
         self.turn_started_at.clear()
         self.session.reset(list(self.participants))
-        self.query_one("#question-input", Input).disabled = True
-        self.query_one("#task-card", Static).update(f"CURRENT QUESTION\n{question}")
+        self.active_view = True
+        self.query_one("#welcome-view", WelcomeView).display = False
+        self.query_one("#bottom-bar", WelcomeQuestionBar).display = False
+        self.query_one("#active-view", ActiveView).display = True
+        active_input = self.query_one("#active-question-input", QuestionInput)
+        active_input.disabled = True
+        active_input.placeholder = "Deliberation in progress…"
+        task = Text()
+        task.append("CURRENT QUESTION\n", style="bold #94a5dc")
+        task.append(question, style="white")
+        self.query_one("#task-card", Static).update(task)
         result = self.query_one("#result", Markdown)
         result.update("")
         result.display = False
-        timeline = self.query_one("#timeline", RichLog)
-        timeline.clear()
-        timeline.write(Text("Starting deliberation…", style="bold cyan"))
+        self.query_one("#timeline", DeliberationTimeline).clear()
         self._render_state()
 
     def _present_event(self, event: DeliberationEvent) -> None:
         participant = event.participant_id
-        if event.event_type is DeliberationEventType.PHASE_STARTED:
-            self._write_timeline(f"▶ {self.session.phase_label}", style="bold cyan")
-        elif event.event_type is DeliberationEventType.PARTICIPANT_TURN_STARTED and participant:
+        if event.event_type is DeliberationEventType.PARTICIPANT_TURN_STARTED and participant:
             self.turn_started_at[participant] = monotonic()
-            self._write_timeline(f"  {participant} started", style="yellow")
-        elif event.event_type is DeliberationEventType.PARTICIPANT_TURN_COMPLETED and participant:
+        elif (
+            event.event_type
+            in {
+                DeliberationEventType.PARTICIPANT_TURN_COMPLETED,
+                DeliberationEventType.PARTICIPANT_TURN_FAILED,
+            }
+            and participant
+        ):
             self.turn_started_at.pop(participant, None)
-            duration = float(event.payload.get("duration_seconds") or 0)
-            self._write_timeline(f"  ✓ {participant} completed · {duration:.1f}s", style="green")
-        elif event.event_type is DeliberationEventType.PARTICIPANT_TURN_FAILED and participant:
-            self.turn_started_at.pop(participant, None)
-            self._write_timeline(f"  ✗ {participant} failed", style="red")
-        elif event.event_type is DeliberationEventType.PHASE_COMPLETED:
-            successful = len(event.payload.get("successful", []))
-            total = int(event.payload.get("total", 0))
-            self._write_timeline(f"  Phase complete · {successful}/{total}", style="dim")
+        self.query_one("#timeline", DeliberationTimeline).present(event)
 
     def _render_outcome(self, outcome: DeliberationOutcome) -> None:
-        final = outcome.final
-        self.query_one("#result", Markdown).update(self._final_markdown(final, outcome.decision_id))
+        self.query_one("#result", Markdown).update(
+            final_markdown(outcome.final, outcome.decision_id, mode=self.mode)
+        )
         self.query_one("#result", Markdown).display = True
-        self._write_timeline("Decision ready.", style="bold green")
-
-    def _final_markdown(self, final: FinalDecision, decision_id: str) -> str:
-        sections = [
-            "## Recommendation",
-            final.recommendation,
-            f"**Confidence:** {final.confidence.value} — {final.confidence_reason}",
-        ]
-        if self.mode != "standard":
-            for heading, values in (
-                ("Supporting reasoning", final.supporting_arguments),
-                ("Alternatives", final.alternatives),
-                ("Disagreements", final.disagreements),
-                ("Assumptions", final.assumptions),
-                ("Risks", final.risks),
-            ):
-                if values:
-                    sections.extend((f"### {heading}", *(f"- {value}" for value in values)))
-        sections.append(f"_Decision record: {decision_id}_")
-        return "\n\n".join(sections)
 
     def _render_state(self) -> None:
         elapsed = int(monotonic() - self.started_at) if self.started_at else 0
-        run_label = self.session.run_id[:8] if self.session.run_id else "new"
         self.query_one("#session-summary", Static).update(
-            f"Run: {run_label}\nStatus: {self.session.status}\n"
-            f"Mode: {self.mode}\nElapsed: {elapsed // 60:02d}:{elapsed % 60:02d}"
+            session_summary(self.session, mode=self.mode, elapsed=elapsed)
         )
-        participants = Text()
-        colors = {
-            "available": "green",
-            "completed": "green",
-            "working": "yellow",
-            "checking": "cyan",
-            "failed": "red",
-            "unavailable": "bright_black",
-            "unsafe": "red",
-        }
-        for name, state in sorted(self.session.participants.items()):
-            color = colors.get(state.status, "white")
-            participants.append(f"● {name.upper()}\n", style=f"bold {color}")
-            participants.append(f"  {state.detail}\n\n", style="dim")
+        self.query_one("#session-strip", Static).update(
+            session_strip(
+                self.session,
+                mode=self.mode,
+                width=self.size.width,
+                version=__version__,
+            )
+        )
+        participants, welcome_participants = participant_texts(self.session.participants)
         self.query_one("#participant-list", Static).update(participants)
+        self.query_one("#welcome-participant-list", Static).update(welcome_participants)
         self.query_one("#phase-progress", ProgressBar).update(
             progress=self.session.completed_phases
         )
         self.query_one("#phase-summary", Static).update(
             f"{self.session.completed_phases}/{len(PHASES)} · {self.session.phase_label}"
         )
+        self.query_one("#protocol-list", Static).update(
+            protocol_text(self.session, running=self.running)
+        )
+        if not self.active_view:
+            self.query_one("#welcome-status", Static).update(
+                welcome_status(self.session.participants)
+            )
 
     def _update_elapsed(self) -> None:
         if not self.running:
@@ -303,7 +288,7 @@ class EgoApp(App[None]):
         self._render_state()
 
     def _write_timeline(self, message: str, *, style: str) -> None:
-        self.query_one("#timeline", RichLog).write(Text(message, style=style))
+        self.query_one("#timeline", DeliberationTimeline).write_message(message, style=style)
 
     def action_cancel_run(self) -> None:
         if self.running and self.active_worker is not None:
@@ -312,7 +297,8 @@ class EgoApp(App[None]):
             self._write_timeline("No active deliberation.", style="dim")
 
     def action_focus_question(self) -> None:
-        question = self.query_one("#question-input", Input)
+        input_id = "#active-question-input" if self.active_view else "#question-input"
+        question = self.query_one(input_id, QuestionInput)
         if not question.disabled:
             question.focus()
 
