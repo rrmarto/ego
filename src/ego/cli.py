@@ -49,7 +49,13 @@ def main(
     """Ego is decision support only; it never implements its recommendation."""
     del version
     if ctx.invoked_subcommand is None:
-        launch_interactive_shell()
+        launch_tui()
+
+
+def launch_tui() -> None:
+    from ego.tui import run_tui
+
+    run_tui(Path.cwd())
 
 
 def services() -> tuple[EgoConfig, Database, dict[str, Participant]]:

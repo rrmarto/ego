@@ -6,8 +6,9 @@ place and must remain read-only.
 
 ## Boundaries
 
-- `cli`: one-off commands, interactive-shell wiring, and rendering.
-- `shell`: state and parsing for the interactive decision environment.
+- `cli`: one-off commands, TUI launch wiring, and non-interactive rendering.
+- `tui`: full-screen interactive workflow and live event presentation.
+- `shell`: legacy line-oriented interaction kept isolated from the harness.
 - `participants`: provider-specific probing and command construction.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.

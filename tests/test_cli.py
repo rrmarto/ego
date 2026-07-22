@@ -14,12 +14,13 @@ def test_help_exposes_public_commands() -> None:
         assert command in result.stdout
 
 
-def test_bare_ego_opens_interactive_environment() -> None:
-    result = runner.invoke(app, input="/exit\n")
+def test_bare_ego_opens_tui(monkeypatch: object) -> None:
+    launched: list[bool] = []
+    monkeypatch.setattr("ego.cli.launch_tui", lambda: launched.append(True))  # type: ignore[attr-defined]
+    result = runner.invoke(app)
 
     assert result.exit_code == 0
-    assert "interactive decision environment" in result.stdout
-    assert "Write a decision question" in result.stdout
+    assert launched == [True]
 
 
 def test_empty_history_commands_are_readable(monkeypatch: object, tmp_path: Path) -> None:

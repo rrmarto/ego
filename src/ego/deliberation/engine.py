@@ -250,6 +250,10 @@ class DeliberationEngine:
     ) -> dict[str, Position]:
         requests: dict[str, tuple[Participant, TurnRequest]] = {}
         for name, participant in participants.items():
+            targeted_reviews = {
+                reviewer: [review for review in bundle.reviews if review.target_participant == name]
+                for reviewer, bundle in reviews.items()
+            }
             requests[name] = (
                 participant,
                 TurnRequest(
@@ -259,7 +263,9 @@ class DeliberationEngine:
                     workspace=workspace,
                     own_position=positions.get(name),
                     peer_positions={key: value for key, value in positions.items() if key != name},
-                    peer_reviews={key: value.reviews for key, value in reviews.items()},
+                    peer_reviews={
+                        reviewer: values for reviewer, values in targeted_reviews.items() if values
+                    },
                 ),
             )
         results = await self._parallel(run_id, phase, requests)
@@ -370,7 +376,6 @@ class DeliberationEngine:
                     phase=Phase.RECONCILIATION,
                     question=question,
                     workspace=workspace,
-                    peer_positions=positions,
                     syntheses=syntheses,
                 ),
             )

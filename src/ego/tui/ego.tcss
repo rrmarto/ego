@@ -1,0 +1,121 @@
+$ego-background: #080c14;
+$ego-panel: #0d1320;
+$ego-border: #273044;
+$ego-purple: #b67cff;
+$ego-yellow: #f4d35e;
+$ego-green: #42d66b;
+$ego-muted: #7d8799;
+
+Screen {
+    background: $ego-background;
+    color: #d8deea;
+}
+
+Header {
+    background: #111722;
+    color: #d8deea;
+}
+
+#workspace-grid {
+    height: 1fr;
+    padding: 1 2;
+}
+
+#main-column {
+    width: 3fr;
+    padding-right: 1;
+}
+
+#side-column {
+    width: 36;
+    background: $ego-panel;
+    border: solid $ego-border;
+    padding: 1 2;
+}
+
+#brand {
+    height: 3;
+    color: $ego-purple;
+    text-style: bold;
+    text-align: center;
+    content-align: center middle;
+}
+
+#tagline {
+    height: 2;
+    color: $ego-yellow;
+    text-align: center;
+}
+
+#task-card {
+    height: auto;
+    min-height: 4;
+    margin-bottom: 1;
+    padding: 1 2;
+    background: $ego-panel;
+    border: solid $ego-border;
+}
+
+#timeline {
+    height: 1fr;
+    min-height: 10;
+    padding: 1 2;
+    background: $ego-panel;
+    border: solid $ego-border;
+    scrollbar-color: $ego-purple;
+}
+
+#result {
+    display: none;
+    height: auto;
+    max-height: 45%;
+    margin-top: 1;
+    padding: 1 2;
+    background: #111722;
+    border: solid $ego-purple;
+    overflow-y: auto;
+}
+
+.panel-title {
+    height: 2;
+    margin-top: 1;
+    color: #8fa0d8;
+    text-style: bold;
+}
+
+#session-summary {
+    height: 5;
+    color: $ego-muted;
+}
+
+#participant-list {
+    height: 1fr;
+    min-height: 12;
+}
+
+#phase-progress {
+    height: 2;
+    color: $ego-green;
+}
+
+#phase-summary {
+    height: 2;
+    color: $ego-muted;
+}
+
+#question-input {
+    dock: bottom;
+    height: 3;
+    margin: 0 2 1 2;
+    padding: 0 1;
+    background: #090d16;
+    border: tall $ego-purple;
+}
+
+#question-input:focus {
+    border: tall $ego-yellow;
+}
+
+Footer {
+    background: #111722;
+}

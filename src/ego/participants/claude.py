@@ -1,17 +1,28 @@
 import json
 
+from ego.models import Phase, TurnRequest
 from ego.participants.base import CliParticipant
 
 
 class ClaudeParticipant(CliParticipant):
     participant_id = "claude"
     default_binary = "claude"
-    required_help_tokens = ("--safe-mode", "--permission-mode", "--json-schema", "--tools")
+    required_help_tokens = (
+        "--safe-mode",
+        "--permission-mode",
+        "--json-schema",
+        "--tools",
+        "--effort",
+    )
 
     def auth_command(self, binary: str) -> list[str] | None:
         return [binary, "auth", "status"]
 
-    def command(self, binary: str, schema: dict[str, object]) -> list[str]:
+    def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
+        tools = {
+            Phase.INDEPENDENT: "Read,Glob,Grep",
+            Phase.PEER_REVIEW: "Read,Grep",
+        }.get(request.phase, "")
         command = [
             binary,
             "--print",
@@ -19,7 +30,9 @@ class ClaudeParticipant(CliParticipant):
             "--permission-mode",
             "plan",
             "--tools",
-            "Read,Glob,Grep",
+            tools,
+            "--effort",
+            "medium",
             "--disable-slash-commands",
             "--strict-mcp-config",
             "--mcp-config",

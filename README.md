@@ -14,8 +14,11 @@ uv run ego doctor
 Install as a tool:
 
 ```bash
-uv tool install .
+uv tool install --force --editable .
 ```
+
+The editable install keeps the global `ego` command linked to the current
+source tree while the project is under development.
 
 ## First deliberation
 
@@ -27,9 +30,9 @@ ego
 ```
 
 Write a question directly to deliberate with every available participant. The
-session remains open for further questions. Use `/help` to see internal commands,
-`/summon codex claude -- <question>` to select participants, `/cd <path>` to
-change workspace, and `/exit` to leave.
+TUI shows participant checks, active phases, per-turn elapsed time, failures,
+and the final recommendation. Use `/help` to see interactive commands, `/mode`
+to change the transparency level, and `/exit` to leave.
 
 The existing subcommands remain available for scripts and one-off use:
 

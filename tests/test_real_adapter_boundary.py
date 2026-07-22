@@ -16,8 +16,8 @@ class SyntheticParticipant(CliParticipant):
     default_binary = "synthetic-ego-cli"
     required_help_tokens = ("--structured",)
 
-    def command(self, binary: str, schema: dict[str, object]) -> list[str]:
-        del schema
+    def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
+        del schema, request
         return [binary]
 
 

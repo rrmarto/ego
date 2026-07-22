@@ -1,3 +1,4 @@
+from ego.models import TurnRequest
 from ego.participants.base import CliParticipant
 
 
@@ -18,7 +19,8 @@ class CodexParticipant(CliParticipant):
     def auth_command(self, binary: str) -> list[str] | None:
         return [binary, "login", "status"]
 
-    def command(self, binary: str, schema: dict[str, object]) -> list[str]:
+    def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
+        del request
         command = [
             binary,
             "exec",

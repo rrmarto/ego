@@ -1,3 +1,4 @@
+from ego.models import TurnRequest
 from ego.participants.base import CliParticipant
 
 
@@ -6,8 +7,8 @@ class CopilotParticipant(CliParticipant):
     default_binary = "copilot"
     required_help_tokens = ("--deny-tool", "--no-ask-user")
 
-    def command(self, binary: str, schema: dict[str, object]) -> list[str]:
-        del schema
+    def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
+        del schema, request
         command = [
             binary,
             "--silent",

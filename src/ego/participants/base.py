@@ -8,8 +8,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Protocol, cast
 
-from pydantic import ValidationError
-
 from ego.config import EgoConfig, ParticipantConfig
 from ego.models import (
     AvailabilityStatus,
@@ -20,7 +18,7 @@ from ego.models import (
     Synthesis,
     TurnRequest,
 )
-from ego.prompts import build_prompt, response_model, response_schema
+from ego.prompts import build_prompt, response_model, response_schema, validate_response
 from ego.runner import ProcessFailure, run_read_only
 from ego.sandbox import SandboxProbe, probe_seatbelt
 
@@ -171,7 +169,7 @@ class CliParticipant(ABC):
         )
 
     @abstractmethod
-    def command(self, binary: str, schema: dict[str, object]) -> list[str]:
+    def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
         raise NotImplementedError
 
     def extract_json(self, stdout: str) -> object:
@@ -221,7 +219,7 @@ class CliParticipant(ABC):
         for _ in range(2):
             prompt = build_prompt(request, correction=errors)
             try:
-                command = self.command(availability.binary, schema)
+                command = self.command(availability.binary, schema, request)
                 process = await run_read_only(
                     command,
                     workspace=request.workspace,
@@ -242,6 +240,7 @@ class CliParticipant(ABC):
             try:
                 parsed = self.unwrap(self.extract_json(process.stdout))
                 payload = model_type.model_validate(parsed)
+                validate_response(request, payload)
                 return ParticipantTurnResult(
                     participant_id=self.participant_id,
                     phase=request.phase,
@@ -250,7 +249,7 @@ class CliParticipant(ABC):
                     duration_seconds=duration,
                     model=self.config.model,
                 )
-            except (ParticipantError, ValidationError, json.JSONDecodeError) as error:
+            except (ParticipantError, ValueError, json.JSONDecodeError) as error:
                 errors = str(error)
         raise ParticipantError(f"invalid structured response after correction: {errors}")
 

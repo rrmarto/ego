@@ -37,6 +37,14 @@ class FakeParticipant:
         )
 
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
+        if request.phase is Phase.REVISION:
+            assert all(
+                review.target_participant == self.participant_id
+                for reviews in request.peer_reviews.values()
+                for review in reviews
+            )
+        if request.phase is Phase.RECONCILIATION:
+            assert request.peer_positions == {}
         citation = Evidence(
             path="architecture.txt",
             line_start=1,
