@@ -17,7 +17,7 @@ the user to choose, write a different conclusion, defer, or reject the result.
 
 Ego v0.1.0:
 
-- coordinates locally installed Codex, Claude, Gemini, and Copilot CLIs;
+- coordinates locally installed Codex, Claude, Gemini, Copilot, and OpenCode CLIs;
 - reads the real workspace under a mandatory macOS Seatbelt boundary;
 - runs a five-phase deliberation protocol instead of selecting a result by vote;
 - validates cited paths, line ranges, and file fragments against the workspace;
@@ -92,7 +92,7 @@ Common interactive commands:
 | --- | --- |
 | `/help` | Show every interactive command. |
 | `/doctor` | Re-run participant and sandbox checks. |
-| `/summon codex claude -- <question>` | Use selected participants. |
+| `/summon codex opencode -- <question>` | Use selected participants. |
 | `/mode standard\|discussion\|expert` | Change the amount of visible detail. |
 | `/runs` and `/inspect <run-id>` | Review previous deliberations. |
 | `/decisions` and `/show <decision-id>` | Review persisted decisions. |
@@ -109,7 +109,7 @@ ego ask "Should we split this service?" --dir .
 
 # Ask explicitly selected participants
 ego summon "Review the caching strategy" --dir . \
-  --participant codex --participant claude
+  --participant codex --participant opencode
 
 # Emit structured output
 ego ask "Review this architecture" --dir . --json
@@ -248,6 +248,14 @@ authentication copy, while the external profile protects the workspace and
 durable user and system locations. Ego does not modify global Codex settings,
 workspace permissions, or macOS policy.
 
+OpenCode does not provide a native security sandbox, so its adapter also requires
+Ego's external Seatbelt boundary. Each call receives temporary HOME and XDG
+directories containing only a private authentication copy, model-selection
+state, and a sanitized subset of the user's OpenCode provider configuration.
+Plugins, MCP servers, custom agents, commands, and tools are not inherited.
+OpenCode runs from a neutral temporary project directory and may only read or
+search the target workspace during the evidence phases.
+
 SQLite stores runs, calls, events, decisions, and human resolutions in the
 platform application-data directory. Raw provider output may contain workspace
 fragments; it is stored separately and removed after 30 days by default. Set
@@ -275,9 +283,16 @@ enabled = false
 
 [participants.copilot]
 enabled = false
+
+[participants.opencode]
+enabled = true
+timeout_seconds = 600
 ```
 
 Participant-specific binary paths can be set with `binary = "/path/to/cli"`.
+OpenCode uses its normal default-model hierarchy: configured model, most recently
+used model, then OpenCode's internal priority. Set `model = "provider/model"`
+under `[participants.opencode]` only when Ego should override that default.
 Run `ego doctor` after any configuration change.
 
 ## Development

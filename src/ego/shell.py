@@ -108,7 +108,7 @@ class InteractiveShell:
                     "Interactive commands:",
                     "  <question>                     Ask every available participant",
                     "  /ask <question>                Same as writing the question directly",
-                    "  /summon codex claude -- <q>    Ask selected participants",
+                    "  /summon codex opencode -- <q>  Ask selected participants",
                     "  /cd <path>                     Change the workspace for this session",
                     "  /pwd                            Show the current workspace",
                     "  /mode standard|discussion|expert",
@@ -152,13 +152,13 @@ class InteractiveShell:
 
     def _summon(self, arguments: list[str]) -> None:
         if "--" not in arguments:
-            self.write("Usage: /summon codex claude -- <question>")
+            self.write("Usage: /summon codex opencode -- <question>")
             return
         separator = arguments.index("--")
         participants = arguments[:separator]
         question = " ".join(arguments[separator + 1 :]).strip()
         if not participants or not question:
-            self.write("Usage: /summon codex claude -- <question>")
+            self.write("Usage: /summon codex opencode -- <question>")
             return
         self.actions.deliberate(question, self.workspace, participants, self.mode)
 
@@ -177,4 +177,3 @@ class InteractiveShell:
             self.write(f"Usage: {command} <id>")
             return
         action(arguments[0])
-

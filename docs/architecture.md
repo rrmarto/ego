@@ -47,14 +47,22 @@ the decision history and never rewrites the original disagreement.
 An adapter is runnable only when its binary exists, its version exposes the
 required controls, and the macOS Seatbelt probe succeeds. The wrapper denies
 writes to both the canonical workspace path and its root entry. Native
-read-only controls remain active except for Codex, whose internal macOS
-Seatbelt cannot be nested inside Ego's external Seatbelt. The Codex adapter
-therefore uses the CLI's explicit externally-sandboxed mode, declares that
-requirement to the shared runner, and is refused if the external wrapper is not
-present. Its stricter external profile also denies writes to durable user and
-system roots while leaving temporary runtime locations available. Each call
-uses an isolated temporary `CODEX_HOME` with a private authentication copy,
-so Codex does not write global sessions, configuration, caches, or state.
+read-only controls remain active except for documented external-only adapters.
+Codex cannot nest its internal macOS Seatbelt inside Ego's external Seatbelt.
+OpenCode declares that its permission system is not a security sandbox. Both
+adapters therefore declare the external-only requirement and are refused if the
+external wrapper is not present. The stricter external profile also denies
+writes to durable user and system roots while leaving temporary runtime
+locations available.
+
+Each Codex call uses an isolated temporary `CODEX_HOME` with a private
+authentication copy. Each OpenCode call uses isolated HOME and XDG directories
+with a private authentication copy, model-selection state, and only the
+`model`/provider subset of the user's configuration. OpenCode plugins, MCP
+servers, agents, commands, and tools are not inherited; its project root is a
+neutral temporary directory rather than the inspected workspace. OpenCode owns
+its normal default-model resolution unless Ego configuration explicitly
+provides a model override.
 Subprocess environments are provider-specific; no participant receives another
 provider's credential variables. This changes only processes launched by Ego;
 it does not modify global CLI or macOS configuration. There is no
@@ -74,7 +82,8 @@ updated in the same transaction as their corresponding event.
 Calls also persist usage metrics when the provider CLI reports them. Ego records
 provider-reported tokens and cost without applying its own pricing estimates;
 interfaces must label unavailable metrics rather than inventing comparable
-values for providers that expose none.
+values for providers that expose none. OpenCode token counts are retained, but
+its calculated price is not stored as billed provider cost.
 
 Human resolutions are stored as append-only structured records containing the
 selected alternative or custom conclusion. A contested decision cannot move to

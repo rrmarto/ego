@@ -20,7 +20,8 @@ class EgoConfig(BaseModel):
     output_limit_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
     participants: dict[str, ParticipantConfig] = Field(
         default_factory=lambda: {
-            name: ParticipantConfig() for name in ("codex", "claude", "gemini", "copilot")
+            name: ParticipantConfig()
+            for name in ("codex", "claude", "gemini", "copilot", "opencode")
         }
     )
 

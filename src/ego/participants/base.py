@@ -228,6 +228,9 @@ class CliParticipant(ABC):
         del stdout
         return None
 
+    def reported_model(self) -> str | None:
+        return self.config.model
+
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
         availability = await self.probe()
         if availability.status is not AvailabilityStatus.AVAILABLE or not availability.binary:
@@ -272,7 +275,7 @@ class CliParticipant(ABC):
                     payload=cast(Position | PeerReviewBundle | Synthesis, payload),
                     raw_output="\n--- correction attempt ---\n".join(raw_outputs),
                     duration_seconds=duration,
-                    model=self.config.model,
+                    model=self.reported_model(),
                     usage=usage,
                 )
             except (ParticipantError, ValueError, json.JSONDecodeError) as error:

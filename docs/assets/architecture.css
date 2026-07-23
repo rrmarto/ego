@@ -1229,7 +1229,7 @@ details[open] summary {
   display: grid;
   gap: 10px;
   margin-top: 18px;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
 }
 
 .provider-grid article {
@@ -1263,6 +1263,7 @@ details[open] summary {
 .claude-dot { background: var(--cyan); box-shadow: 0 0 12px rgba(82, 201, 235, 0.4); }
 .gemini-dot { background: var(--green); box-shadow: 0 0 12px rgba(88, 214, 110, 0.4); }
 .copilot-dot { background: var(--purple); box-shadow: 0 0 12px rgba(170, 140, 255, 0.4); }
+.opencode-dot { background: var(--yellow); box-shadow: 0 0 12px rgba(240, 205, 88, 0.4); }
 
 .evidence-grid {
   display: grid;

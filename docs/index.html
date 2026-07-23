@@ -84,7 +84,7 @@
 
         <div class="system-facts" aria-label="Principios clave">
           <div><strong>5</strong><span>fases del protocolo</span></div>
-          <div><strong>4</strong><span>adaptadores soportados</span></div>
+          <div><strong>5</strong><span>adaptadores soportados</span></div>
           <div><strong>RO</strong><span>workspace de solo lectura</span></div>
           <div><strong>SQL</strong><span>registro auditable local</span></div>
         </div>
@@ -253,7 +253,7 @@
               <article class="architecture-node accent-cyan">
                 <span class="node-kicker">EXTERNAL PROCESSES</span>
                 <h3>Provider CLIs</h3>
-                <p>Codex, Claude, Gemini y Copilot instalados y autenticados por cada usuario.</p>
+                <p>Codex, Claude, Gemini, Copilot y OpenCode instalados y autenticados por cada usuario.</p>
                 <code>local binaries</code>
               </article>
               <article class="architecture-node accent-red">
@@ -559,11 +559,31 @@
           </div>
         </div>
 
+        <div class="codex-exception">
+          <div class="exception-mark">OPEN<br />CODE</div>
+          <div>
+            <p class="node-kicker">ISOLATED EXTERNAL-SANDBOX ADAPTER</p>
+            <h3>OpenCode conserva su modelo predeterminado</h3>
+            <p>
+              OpenCode no ofrece un sandbox de seguridad nativo. Ego lo ejecuta desde un proyecto
+              temporal neutro, con HOME y XDG aislados, configuración sanitizada y Seatbelt externo.
+              El adaptador no fija un modelo: conserva la selección predeterminada de OpenCode.
+            </p>
+            <ul>
+              <li>Credenciales y estado de selección copiados con permisos privados.</li>
+              <li>Plugins, MCP, agentes, comandos, shell, edición, web y delegación desactivados.</li>
+              <li>Lectura, glob y grep del workspace solo durante las fases con evidencia.</li>
+              <li>Tokens reportados; el coste calculado no se presenta como facturación confirmada.</li>
+            </ul>
+          </div>
+        </div>
+
         <div class="provider-grid">
           <article><span class="provider-dot codex-dot"></span><h3>Codex</h3><p>External-only Seatbelt · JSON schema · uso reportado</p></article>
           <article><span class="provider-dot claude-dot"></span><h3>Claude</h3><p>Safe/plan mode · tools por fase · tokens + coste</p></article>
           <article><span class="provider-dot gemini-dot"></span><h3>Gemini</h3><p>Approval plan · salida JSON · entorno filtrado</p></article>
           <article><span class="provider-dot copilot-dot"></span><h3>Copilot</h3><p>Shell/write/url/memory denegados · sin preguntas</p></article>
+          <article><span class="provider-dot opencode-dot"></span><h3>OpenCode</h3><p>Modelo por defecto · runtime aislado · eventos JSON</p></article>
         </div>
       </section>
 
@@ -691,7 +711,7 @@
             <span>ORCHESTRATION</span><strong>deliberation/</strong><p>Fases, paralelismo, síntesis, reconciliación y finalización.</p>
           </a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/participants/base.py">
-            <span>PROVIDERS</span><strong>participants/</strong><p>Contrato común y adaptadores Codex, Claude, Gemini y Copilot.</p>
+            <span>PROVIDERS</span><strong>participants/</strong><p>Contrato común y adaptadores Codex, Claude, Gemini, Copilot y OpenCode.</p>
           </a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/storage/database.py">
             <span>TRUTH</span><strong>storage/</strong><p>Schema SQLite, eventos, calls, decisiones y retención.</p>
@@ -722,6 +742,7 @@
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0004-textual-tui.md">0004 · Textual TUI</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0005-codex-external-sandbox.md">0005 · Codex external sandbox</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0006-citation-scope-and-human-resolution.md">0006 · citation scope + human resolution</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0007-opencode-external-sandbox-and-default-model.md">0007 · OpenCode external sandbox + default model</a></li>
           </ol>
         </div>
       </section>

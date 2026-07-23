@@ -20,6 +20,8 @@ from ego.models import (
 )
 from ego.participants.claude import ClaudeParticipant
 from ego.participants.codex import CodexParticipant
+from ego.participants.opencode import OpenCodeParticipant
+from ego.participants.registry import build_participants
 from ego.prompts import build_prompt, validate_response
 
 
@@ -83,6 +85,256 @@ def test_codex_command_uses_only_ego_external_sandbox(
         assert probe_home != source_home
         assert (probe_home / "auth.json").read_text(encoding="utf-8") == "{}"
     assert not probe_home.exists()
+
+
+def test_opencode_command_uses_default_model_in_an_isolated_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_home = tmp_path / "source-home"
+    source_config = tmp_path / "source-config"
+    source_data = tmp_path / "source-data"
+    source_state = tmp_path / "source-state"
+    (source_config / "opencode").mkdir(parents=True)
+    (source_data / "opencode").mkdir(parents=True)
+    (source_state / "opencode").mkdir(parents=True)
+    source_home.mkdir()
+    source_jsonc = json.dumps(
+        {
+                "model": "custom/default-model",
+                "provider": {
+                    "custom": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "options": {
+                            "baseURL": "http://localhost:11434/v1",
+                            "apiKey": "{env:CUSTOM_PROVIDER_KEY}",
+                        },
+                        "models": {"default-model": {"name": "Default"}},
+                    }
+                },
+                "plugin": ["must-not-load"],
+                "mcp": {
+                    "must-not-start": {
+                        "type": "local",
+                        "command": ["/usr/bin/touch", "/tmp/must-not-run"],
+                    }
+                },
+                "agent": {"build": {"prompt": "Must not be inherited."}},
+        }
+    )
+    (source_config / "opencode" / "opencode.jsonc").write_text(
+        "// OpenCode allows comments and trailing commas.\n" + source_jsonc[:-1] + ",\n}",
+        encoding="utf-8",
+    )
+    (source_data / "opencode" / "auth.json").write_text(
+        '{"custom":{"type":"api","key":"secret"}}',
+        encoding="utf-8",
+    )
+    (source_state / "opencode" / "model.json").write_text(
+        json.dumps(
+            {
+                "recent": [{"providerID": "custom", "modelID": "recent-model"}],
+                "favorite": [],
+                "variant": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(source_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(source_config))
+    monkeypatch.setenv("XDG_DATA_HOME", str(source_data))
+    monkeypatch.setenv("XDG_STATE_HOME", str(source_state))
+    monkeypatch.setenv("CUSTOM_PROVIDER_KEY", "provider-secret")
+
+    participant = OpenCodeParticipant(ParticipantConfig(), EgoConfig())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = TurnRequest(
+        run_id="run",
+        phase=Phase.INDEPENDENT,
+        question="Question?",
+        workspace=workspace,
+    )
+
+    command = participant.command("/usr/local/bin/opencode", {}, request)
+
+    assert command[0] == "/usr/bin/env"
+    runtime_home = Path(command[1].removeprefix("HOME="))
+    runtime_config_home = Path(command[2].removeprefix("XDG_CONFIG_HOME="))
+    runtime_data_home = Path(command[3].removeprefix("XDG_DATA_HOME="))
+    runtime_state_home = Path(command[5].removeprefix("XDG_STATE_HOME="))
+    runtime_config = json.loads(
+        (runtime_config_home / "opencode" / "opencode.json").read_text(encoding="utf-8")
+    )
+    runtime_auth = runtime_data_home / "opencode" / "auth.json"
+    runtime_model_state = runtime_state_home / "opencode" / "model.json"
+
+    assert runtime_home != source_home
+    assert runtime_config["model"] == "custom/default-model"
+    assert runtime_config["provider"] == {
+        "custom": {
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "http://localhost:11434/v1",
+                "apiKey": "{env:CUSTOM_PROVIDER_KEY}",
+            },
+            "models": {"default-model": {"name": "Default"}},
+        }
+    }
+    assert runtime_config["plugin"] == []
+    assert runtime_config["mcp"] == {}
+    assert set(runtime_config["agent"]) == {"ego"}
+    assert runtime_config["share"] == "disabled"
+    assert runtime_config["permission"]["edit"] == "deny"
+    assert runtime_config["permission"]["bash"] == "deny"
+    assert runtime_config["permission"]["task"] == "deny"
+    assert runtime_config["permission"]["read"][str(workspace.resolve()) + "/**"] == "allow"
+    assert runtime_config["permission"]["external_directory"][
+        str(workspace.resolve()) + "/**"
+    ] == "allow"
+    assert runtime_auth.read_text(encoding="utf-8") == (
+        '{"custom":{"type":"api","key":"secret"}}'
+    )
+    assert stat.S_IMODE(runtime_auth.stat().st_mode) == 0o600
+    assert json.loads(runtime_model_state.read_text(encoding="utf-8"))["recent"][0] == {
+        "providerID": "custom",
+        "modelID": "recent-model",
+    }
+    assert "CUSTOM_PROVIDER_KEY" in participant.environment_keys
+    assert command[command.index("--dir") + 1] == str(runtime_home / "project")
+    assert command[command.index("--format") + 1] == "json"
+    assert "--pure" in command
+    assert "--auto" not in command
+    assert "--model" not in command
+    assert participant.requires_external_sandbox
+    assert participant.resolved_model == "custom/default-model"
+
+    participant.cleanup_command(command)
+    assert not runtime_home.exists()
+
+
+def test_opencode_explicit_model_remains_an_optional_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    participant = OpenCodeParticipant(
+        ParticipantConfig(model="github-copilot/gpt-5.4-mini"),
+        EgoConfig(),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    command = participant.command(
+        "/usr/local/bin/opencode",
+        {},
+        TurnRequest(
+            run_id="run",
+            phase=Phase.REVISION,
+            question="Question?",
+            workspace=workspace,
+        ),
+    )
+    runtime_config_home = Path(command[2].removeprefix("XDG_CONFIG_HOME="))
+    runtime_config = json.loads(
+        (runtime_config_home / "opencode" / "opencode.json").read_text(encoding="utf-8")
+    )
+
+    assert command[command.index("--model") + 1] == "github-copilot/gpt-5.4-mini"
+    assert runtime_config["model"] == "github-copilot/gpt-5.4-mini"
+    assert runtime_config["permission"]["read"] == "deny"
+    assert runtime_config["permission"]["glob"] == "deny"
+    participant.cleanup_command(command)
+
+
+def test_opencode_extracts_final_json_event_and_reported_tokens() -> None:
+    participant = OpenCodeParticipant(ParticipantConfig(), EgoConfig())
+    payload = Position(
+        recommendation="Keep the boundary.",
+        confidence=Confidence.MODERATE,
+        confidence_reason="The inspected source supports it.",
+    ).model_dump(mode="json")
+    output = "\n".join(
+        (
+            json.dumps(
+                {
+                    "type": "step_finish",
+                    "part": {
+                        "tokens": {
+                            "input": 120,
+                            "output": 30,
+                            "reasoning": 10,
+                            "cache": {"read": 40, "write": 0},
+                            "total": 200,
+                        },
+                        "cost": 0.123,
+                    },
+                }
+            ),
+            json.dumps({"type": "text", "part": {"text": json.dumps(payload)}}),
+        )
+    )
+
+    assert participant.extract_json(output) == payload
+    assert participant.extract_usage(output) == UsageMetrics(
+        input_tokens=120,
+        output_tokens=30,
+        cached_input_tokens=40,
+        total_tokens=200,
+    )
+
+
+@pytest.mark.asyncio
+async def test_opencode_temporary_home_is_removed_when_turn_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "source-home"))
+    participant = OpenCodeParticipant(ParticipantConfig(), EgoConfig())
+    runtime_homes: list[Path] = []
+    original_command = participant.command
+
+    async def fake_probe() -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id="opencode",
+            status=AvailabilityStatus.AVAILABLE,
+            binary="/usr/local/bin/opencode",
+        )
+
+    def capture_command(
+        binary: str, schema: dict[str, object], request: TurnRequest
+    ) -> list[str]:
+        command = original_command(binary, schema, request)
+        runtime_homes.append(Path(command[1].removeprefix("HOME=")))
+        return command
+
+    async def cancelled_run(*args: object, **kwargs: object) -> ProcessResult:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(participant, "probe", fake_probe)
+    monkeypatch.setattr(participant, "command", capture_command)
+    monkeypatch.setattr("ego.participants.base.run_read_only", cancelled_run)
+
+    with pytest.raises(asyncio.CancelledError):
+        await participant.respond(
+            TurnRequest(
+                run_id="cancelled",
+                phase=Phase.INDEPENDENT,
+                question="Read only.",
+                workspace=tmp_path,
+            )
+        )
+
+    assert runtime_homes
+    assert all(not path.exists() for path in runtime_homes)
+
+
+def test_existing_config_without_opencode_still_builds_every_participant() -> None:
+    config = EgoConfig(participants={"codex": ParticipantConfig(enabled=False)})
+
+    participants = build_participants(config)
+
+    assert set(participants) == {"codex", "claude", "gemini", "copilot", "opencode"}
+    assert not participants["codex"].config.enabled  # type: ignore[attr-defined]
+    assert participants["opencode"].config.enabled  # type: ignore[attr-defined]
 
 
 def test_claude_tools_are_limited_by_phase() -> None:

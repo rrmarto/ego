@@ -20,7 +20,7 @@ COMMANDS = (
     CommandSpec("/ask", "/ask <question>", "Ask every participant"),
     CommandSpec(
         "/summon",
-        "/summon codex claude -- <question>",
+        "/summon codex opencode -- <question>",
         "Ask selected participants",
     ),
     CommandSpec("/cd", "/cd <path>", "Change the session workspace"),
