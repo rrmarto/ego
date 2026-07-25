@@ -73,6 +73,10 @@ Reconciliation merges matching findings and keeps conflicts under
 `disputed_findings`; investigation disagreement never creates alternatives or
 a human decision. A backed useful report is `completed`. Insufficient evidence,
 critical stale evidence, or material degradation is `inconclusive`.
+To make deterministic exact deduplication effective without guessing semantic
+similarity, both reconciliators copy canonical claim and hypothesis wording from
+the first supplied synthesis only when material claim, scope, conditions, and
+state agree. Materially different items remain separate.
 
 Investigation prompts carry the complete material conclusions from prior
 stages, while omitting citation hashes used only for local persistence and

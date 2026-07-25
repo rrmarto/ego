@@ -15,6 +15,7 @@ from ego.models import (
     InvestigationPhase,
     InvestigationReview,
     InvestigationReviewBundle,
+    InvestigationSynthesis,
     ParticipantAvailability,
     Phase,
     Position,
@@ -392,6 +393,27 @@ def test_investigation_prompt_compacts_storage_only_evidence_metadata() -> None:
     assert "src/ego/models.py" in prompt
     assert "file_sha256" not in prompt
     assert "fragment_sha256" not in prompt
+
+
+def test_reconciliation_prompt_uses_safe_canonical_wording() -> None:
+    prompt = build_prompt(
+        TurnRequest(
+            run_id="run",
+            phase=InvestigationPhase.RECONCILIATION,
+            question="Why?",
+            workspace=".",
+            agent_id="investigate",
+            workflow_id="investigation",
+            investigation_syntheses={
+                "claude": InvestigationSynthesis(unknowns=["First report"]),
+                "codex": InvestigationSynthesis(unknowns=["Second report"]),
+            },
+        )
+    )
+
+    assert "material claim, scope, conditions, and hypothesis state agree" in prompt
+    assert "copy its claim or hypothesis wording verbatim from the first synthesis" in prompt
+    assert "Keep items separate when any material difference remains" in prompt
 
 
 def test_opencode_explicit_model_remains_an_optional_override(

@@ -245,7 +245,12 @@ def _build_investigation_prompt(
         ),
         InvestigationPhase.RECONCILIATION: (
             "Reconcile the two supplied reports. Merge matching findings and preserve every "
-            "material disputed finding. Never turn disagreement into alternatives for the user."
+            "material disputed finding. Treat items as matching only when their material claim, "
+            "scope, conditions, and hypothesis state agree. For each matching item, emit it once "
+            "and copy its claim or hypothesis wording verbatim from the first synthesis in "
+            "Context, while merging distinct evidence and the strongest explanation. Keep items "
+            "separate when any material difference remains. Never turn disagreement into "
+            "alternatives for the user."
         ),
     }
     correction_text = ""
