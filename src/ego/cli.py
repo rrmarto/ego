@@ -10,9 +10,12 @@ from typing import Annotated, Any
 import typer
 
 from ego import __version__
+from ego.agents import build_agent_registry
+from ego.agents.investigate import InvestigationInput
 from ego.config import AppPaths, EgoConfig, load_config
-from ego.deliberation import DeliberationEngine, NoParticipantsError
-from ego.models import AvailabilityStatus, FinalDecision
+from ego.decision import DecisionInput
+from ego.deliberation import NoParticipantsError
+from ego.models import AvailabilityStatus, FinalDecision, InvestigationReport
 from ego.participants import Participant, build_participants
 from ego.shell import InteractiveShell, ShellActions
 from ego.storage import Database
@@ -163,6 +166,29 @@ def render_expert_calls(run: dict[str, Any]) -> None:
             emit_json(json.loads(call["parsed_json"]))
 
 
+def render_investigation(report: InvestigationReport) -> None:
+    typer.echo(f"Run: {report.run_id}")
+    typer.echo(f"Status: {report.status.value}")
+    sections: tuple[tuple[str, list[Any]], ...] = (
+        ("Findings", report.findings),
+        ("Hypotheses", report.hypotheses),
+        ("Disputed findings", report.disputed_findings),
+        ("Unknowns", report.unknowns),
+        ("Next checks", report.next_checks),
+    )
+    for heading, values in sections:
+        if not values:
+            continue
+        typer.echo(f"\n{heading}")
+        for value in values:
+            if hasattr(value, "model_dump"):
+                emit_json(value)
+            else:
+                typer.echo(f"- {value}")
+    for warning in report.warnings:
+        typer.echo(f"WARNING: {warning}", err=True)
+
+
 async def execute_deliberation(
     *,
     question: str,
@@ -178,14 +204,17 @@ async def execute_deliberation(
     if unknown:
         raise typer.BadParameter(f"unknown participant(s): {', '.join(unknown)}")
     workspace = resolve_workspace(directory)
-    engine = DeliberationEngine(database, participants)
+    registry = build_agent_registry(database, participants)
     try:
-        outcome = await engine.deliberate(
-            question=question,
-            workspace=workspace,
-            participant_ids=selected,
-            command=command,
-            parent_decision_id=parent_decision_id,
+        outcome = await registry.dispatch(
+            "decision",
+            DecisionInput(
+                question=question,
+                workspace=workspace,
+                participant_ids=selected,
+                command=command,
+                parent_decision_id=parent_decision_id,
+            ),
         )
     except NoParticipantsError as error:
         typer.echo(f"Ego could not start: {error}. Run `ego doctor` for details.", err=True)
@@ -207,6 +236,43 @@ async def execute_deliberation(
             )
 
 
+async def execute_investigation(
+    *,
+    question: str,
+    directory: Path,
+    selected: list[str],
+    json_output: bool,
+) -> None:
+    _, database, participants = services()
+    unknown = sorted(set(selected) - set(participants))
+    if unknown:
+        raise typer.BadParameter(f"unknown participant(s): {', '.join(unknown)}")
+    workspace = resolve_workspace(directory)
+    registry = build_agent_registry(database, participants)
+    try:
+        outcome = await registry.dispatch(
+            "investigate",
+            InvestigationInput(
+                question=question,
+                workspace=workspace,
+                participant_ids=selected,
+            ),
+        )
+    except NoParticipantsError as error:
+        typer.echo(f"Ego could not start: {error}. Run `ego doctor` for details.", err=True)
+        raise typer.Exit(2) from error
+    if json_output:
+        emit_json(
+            {
+                "agent_id": "investigate",
+                "workflow_id": "investigation",
+                "report": outcome.report.model_dump(mode="json"),
+            }
+        )
+    else:
+        render_investigation(outcome.report)
+
+
 @app.command()
 def ask(
     question: Annotated[str, typer.Argument(help="Decision question.")],
@@ -223,6 +289,25 @@ def ask(
             selected=list(participants),
             command="ask",
             mode=mode,
+            json_output=json_output,
+        )
+    )
+
+
+@app.command()
+def investigate(
+    question: Annotated[str, typer.Argument(help="Local workspace investigation question.")],
+    directory: Annotated[Path, typer.Option("--dir", help="Directory to inspect.")] = Path("."),
+    participant: Annotated[list[str] | None, typer.Option("--participant", "-p")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Investigate the local workspace without web, commands, or modifications."""
+    _, _, participants = services()
+    asyncio.run(
+        execute_investigation(
+            question=question,
+            directory=directory,
+            selected=participant or list(participants),
             json_output=json_output,
         )
     )
@@ -311,7 +396,10 @@ def runs(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
         emit_json(rows)
         return
     for row in rows:
-        typer.echo(f"{row['id']}  {row['status']:<12} {row['question']}")
+        typer.echo(
+            f"{row['id']}  {row['status']:<12} "
+            f"{row['agent_id']}/{row['workflow_id']}  {row['question']}"
+        )
 
 
 @app.command("inspect")
@@ -331,8 +419,23 @@ def inspect_run(
         return
     if row["final_json"]:
         render_final(FinalDecision.model_validate_json(row["final_json"]), mode)
+    elif row["result_kind"] == "investigation_report" and row["result"]:
+        render_investigation(InvestigationReport.model_validate(row["result"]))
     else:
-        emit_json({key: row[key] for key in ("id", "status", "question", "workspace")})
+        emit_json(
+            {
+                key: row[key]
+                for key in (
+                    "id",
+                    "status",
+                    "agent_id",
+                    "workflow_id",
+                    "result_kind",
+                    "question",
+                    "workspace",
+                )
+            }
+        )
 
 
 @decisions_app.callback()

@@ -5,10 +5,27 @@ from typing import cast
 
 from pydantic import BaseModel
 
-from ego.models import PeerReviewBundle, Phase, Position, Synthesis, TurnRequest
+from ego.models import (
+    InvestigationDraft,
+    InvestigationPhase,
+    InvestigationReviewBundle,
+    InvestigationSynthesis,
+    PeerReviewBundle,
+    Phase,
+    Position,
+    Synthesis,
+    TurnRequest,
+    WorkStage,
+)
 
 
-def response_model(phase: Phase) -> type[BaseModel]:
+def response_model(phase: WorkStage) -> type[BaseModel]:
+    if isinstance(phase, InvestigationPhase):
+        if phase in {InvestigationPhase.INDEPENDENT, InvestigationPhase.REVISION}:
+            return InvestigationDraft
+        if phase is InvestigationPhase.PEER_CHALLENGE:
+            return InvestigationReviewBundle
+        return InvestigationSynthesis
     if phase in {Phase.INDEPENDENT, Phase.REVISION}:
         return Position
     if phase is Phase.PEER_REVIEW:
@@ -16,12 +33,15 @@ def response_model(phase: Phase) -> type[BaseModel]:
     return Synthesis
 
 
-def response_schema(phase: Phase) -> dict[str, object]:
+def response_schema(phase: WorkStage) -> dict[str, object]:
     schema = response_model(phase).model_json_schema()
     return cast(dict[str, object], _strict_schema(schema))
 
 
 def validate_response(request: TurnRequest, response: BaseModel) -> None:
+    if isinstance(request.phase, InvestigationPhase):
+        _validate_investigation_response(request, response)
+        return
     if isinstance(response, Synthesis):
         _validate_synthesis_response(request, response)
         return
@@ -43,6 +63,33 @@ def validate_response(request: TurnRequest, response: BaseModel) -> None:
             "a maintained position must preserve at least one prior argument id; "
             "otherwise mark changed_position true and explain the change"
         )
+
+
+def _validate_investigation_response(request: TurnRequest, response: BaseModel) -> None:
+    if isinstance(response, InvestigationReviewBundle):
+        known = set(request.peer_investigations)
+        unknown = sorted(
+            {
+                review.target_participant
+                for review in response.reviews
+                if review.target_participant not in known
+            }
+        )
+        if unknown:
+            raise ValueError("review referenced unknown participants: " + ", ".join(unknown))
+        return
+    if isinstance(response, InvestigationDraft):
+        if not response.findings and not response.hypotheses and not response.unknowns:
+            raise ValueError("investigation must contain findings, hypotheses, or unknowns")
+        return
+    if isinstance(response, InvestigationSynthesis):
+        if not (
+            response.facts
+            or response.probable_causes
+            or response.disputed_findings
+            or response.unknowns
+        ):
+            raise ValueError("investigation synthesis must contain a material result")
 
 
 def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> None:
@@ -98,7 +145,18 @@ def _strict_schema(value: object) -> object:
     return normalized
 
 
-def build_prompt(request: TurnRequest, *, correction: str | None = None) -> str:
+def build_prompt(
+    request: TurnRequest,
+    *,
+    correction: str | None = None,
+    previous_response: object | None = None,
+) -> str:
+    if isinstance(request.phase, InvestigationPhase):
+        return _build_investigation_prompt(
+            request,
+            correction=correction,
+            previous_response=previous_response,
+        )
     instructions = {
         Phase.INDEPENDENT: (
             "Analyze independently. Inspect relevant files before making repository claims. "
@@ -157,6 +215,145 @@ Context:
 Return only JSON matching this schema:
 {json.dumps(schema, ensure_ascii=False)}
 """
+
+
+def _build_investigation_prompt(
+    request: TurnRequest,
+    *,
+    correction: str | None = None,
+    previous_response: object | None = None,
+) -> str:
+    phase = request.phase
+    if not isinstance(phase, InvestigationPhase):
+        raise TypeError("investigation prompt requires an investigation stage")
+    instructions = {
+        InvestigationPhase.INDEPENDENT: (
+            "Inspect the workspace independently. Collect facts, hypotheses, unknowns, and exact "
+            "local evidence. Try to falsify each important hypothesis."
+        ),
+        InvestigationPhase.PEER_CHALLENGE: (
+            "Challenge every peer investigation. Identify valid points, unsupported claims, "
+            "missing evidence, and hypotheses that were omitted."
+        ),
+        InvestigationPhase.REVISION: (
+            "Revise your investigation after the targeted challenges. Keep, modify, or refute "
+            "hypotheses explicitly according to the available evidence."
+        ),
+        InvestigationPhase.SYNTHESIS: (
+            "Consolidate the supplied investigations without adding evidence. Separate facts, "
+            "probable causes, disputes, unknowns, and useful next read-only checks."
+        ),
+        InvestigationPhase.RECONCILIATION: (
+            "Reconcile the two supplied reports. Merge matching findings and preserve every "
+            "material disputed finding. Never turn disagreement into alternatives for the user."
+        ),
+    }
+    correction_text = ""
+    if correction and previous_response is not None:
+        correction_text = (
+            "\nRepair the previous structured response. Do not restart the investigation or "
+            "gather new evidence. Preserve every valid conclusion and change only what is "
+            f"needed to resolve this validation error: {correction}\n"
+            "Previous structured response:\n"
+            f"{json.dumps(_without_storage_metadata(previous_response), ensure_ascii=False)}\n"
+        )
+    elif correction:
+        correction_text = f"\nPrevious response validation error: {correction}\n"
+    if request.tool_policy.read:
+        tool_instruction = (
+            "You may only read, glob, grep, and search files inside the target workspace. "
+            "Do not use a shell, run commands or tests, write files, access the web or URLs, "
+            "load plugins or MCP, or delegate. Search narrowly, batch related reads, and stop "
+            "when the cited evidence is sufficient. Do not enumerate the whole workspace or "
+            "inspect .git, .venv, node_modules, build, dist, or cache directories unless the "
+            "question specifically requires them."
+        )
+    else:
+        tool_instruction = (
+            "Use only the structured context below. Do not use any tool or inspect the workspace."
+        )
+    return f"""You are a peer in Ego's local-only investigation workflow.
+You have equal authority with every other participant. {tool_instruction}
+Return concise auditable conclusions, not private chain-of-thought. Cite repository claims with a
+relative path and exact line range. Return only distinct material items; merge overlapping claims
+instead of repeating paraphrases. A verified citation proves only the file fragment's integrity,
+not the semantic claim. Respond in {request.language}.
+
+Agent: {request.agent_id}
+Workflow: {request.workflow_id}
+Stage: {request.phase.value}
+Question: {request.question}
+Task: {instructions[phase]}
+{correction_text}
+Context:
+{json.dumps(_compact_investigation_context(request), ensure_ascii=False)}
+
+Return only JSON matching this schema:
+{json.dumps(response_schema(request.phase), ensure_ascii=False)}
+"""
+
+
+def _compact_investigation_context(request: TurnRequest) -> dict[str, object]:
+    compacted = _without_storage_metadata(_investigation_context(request))
+    assert isinstance(compacted, dict)
+    return compacted
+
+
+def _without_storage_metadata(value: object) -> object:
+    if isinstance(value, list):
+        return [_without_storage_metadata(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _without_storage_metadata(item)
+        for key, item in value.items()
+        if key not in {"file_sha256", "fragment_sha256"}
+        and not (key == "validation_error" and item is None)
+    }
+
+
+def _investigation_context(request: TurnRequest) -> dict[str, object]:
+    if request.phase is InvestigationPhase.INDEPENDENT:
+        return {"workspace": str(request.workspace)}
+    if request.phase is InvestigationPhase.PEER_CHALLENGE:
+        return {
+            "workspace": str(request.workspace),
+            "own_investigation": request.own_investigation.model_dump(mode="json")
+            if request.own_investigation
+            else None,
+            "peer_investigations": {
+                key: value.model_dump(mode="json")
+                for key, value in request.peer_investigations.items()
+            },
+        }
+    if request.phase is InvestigationPhase.REVISION:
+        return {
+            "workspace": str(request.workspace),
+            "own_investigation": request.own_investigation.model_dump(mode="json")
+            if request.own_investigation
+            else None,
+            "peer_investigations": {
+                key: value.model_dump(mode="json")
+                for key, value in request.peer_investigations.items()
+            },
+            "reviews": {
+                key: [item.model_dump(mode="json") for item in value]
+                for key, value in request.investigation_reviews.items()
+            },
+        }
+    if request.phase is InvestigationPhase.SYNTHESIS:
+        return {
+            "investigations": {
+                key: value.model_dump(mode="json")
+                for key, value in request.peer_investigations.items()
+            }
+        }
+    return {
+        "syntheses": {
+            key: value.model_dump(mode="json")
+            for key, value in request.investigation_syntheses.items()
+        }
+    }
 
 
 def _phase_context(request: TurnRequest) -> dict[str, object]:

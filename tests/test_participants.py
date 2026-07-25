@@ -10,11 +10,17 @@ from ego.models import (
     Argument,
     AvailabilityStatus,
     Confidence,
+    Evidence,
+    InvestigationDraft,
+    InvestigationPhase,
+    InvestigationReview,
+    InvestigationReviewBundle,
     ParticipantAvailability,
     Phase,
     Position,
     ProcessResult,
     Synthesis,
+    ToolPolicy,
     TurnRequest,
     UsageMetrics,
 )
@@ -187,7 +193,7 @@ def test_opencode_command_uses_default_model_in_an_isolated_runtime(
     assert runtime_config["permission"]["edit"] == "deny"
     assert runtime_config["permission"]["bash"] == "deny"
     assert runtime_config["permission"]["task"] == "deny"
-    assert runtime_config["permission"]["read"][str(workspace.resolve()) + "/**"] == "allow"
+    assert runtime_config["permission"]["read"] == "allow"
     assert runtime_config["permission"]["external_directory"][
         str(workspace.resolve()) + "/**"
     ] == "allow"
@@ -210,6 +216,182 @@ def test_opencode_command_uses_default_model_in_an_isolated_runtime(
 
     participant.cleanup_command(command)
     assert not runtime_home.exists()
+
+
+@pytest.mark.asyncio
+async def test_investigation_correction_reuses_response_without_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    participant = ClaudeParticipant(ParticipantConfig(), EgoConfig())
+    commands: list[list[str]] = []
+    prompts: list[str] = []
+    responses = [
+        InvestigationReviewBundle(
+            reviews=[
+                InvestigationReview(
+                    target_participant="unknown",
+                    challenges=["Check the cited configuration."],
+                )
+            ]
+        ),
+        InvestigationReviewBundle(
+            reviews=[
+                InvestigationReview(
+                    target_participant="codex",
+                    challenges=["Check the cited configuration."],
+                )
+            ]
+        ),
+    ]
+
+    async def fake_probe() -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id="claude",
+            status=AvailabilityStatus.AVAILABLE,
+            binary="/usr/local/bin/claude",
+        )
+
+    async def fake_run(
+        command: list[str],
+        *,
+        stdin: str,
+        **kwargs: object,
+    ) -> ProcessResult:
+        del kwargs
+        commands.append(command)
+        prompts.append(stdin)
+        response = responses[len(commands) - 1]
+        return ProcessResult(
+            command=command,
+            returncode=0,
+            stdout=json.dumps({"structured_output": response.model_dump(mode="json")}),
+            stderr="",
+            duration_seconds=0.01,
+        )
+
+    request = TurnRequest(
+        run_id="run",
+        phase=InvestigationPhase.PEER_CHALLENGE,
+        question="Why?",
+        workspace=tmp_path,
+        agent_id="investigate",
+        workflow_id="investigation",
+        tool_policy=ToolPolicy.local_read_only(),
+        peer_investigations={
+            "codex": InvestigationDraft(unknowns=["Whether an override exists."])
+        },
+    )
+    monkeypatch.setattr(participant, "probe", fake_probe)
+    monkeypatch.setattr("ego.participants.base.run_read_only", fake_run)
+
+    result = await participant.respond(request)
+
+    assert isinstance(result.payload, InvestigationReviewBundle)
+    assert [command[command.index("--tools") + 1] for command in commands] == [
+        "Read,Glob,Grep",
+        "",
+    ]
+    assert "Repair the previous structured response" in prompts[1]
+    assert '"target_participant": "unknown"' in prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_undecodable_investigation_response_retains_full_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    participant = ClaudeParticipant(ParticipantConfig(), EgoConfig())
+    commands: list[list[str]] = []
+
+    async def fake_probe() -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id="claude",
+            status=AvailabilityStatus.AVAILABLE,
+            binary="/usr/local/bin/claude",
+        )
+
+    async def fake_run(
+        command: list[str],
+        **kwargs: object,
+    ) -> ProcessResult:
+        del kwargs
+        commands.append(command)
+        stdout = (
+            "not-json"
+            if len(commands) == 1
+            else json.dumps(
+                {
+                    "structured_output": InvestigationDraft(
+                        unknowns=["More local evidence is required."]
+                    ).model_dump(mode="json")
+                }
+            )
+        )
+        return ProcessResult(
+            command=command,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+            duration_seconds=0.01,
+        )
+
+    monkeypatch.setattr(participant, "probe", fake_probe)
+    monkeypatch.setattr("ego.participants.base.run_read_only", fake_run)
+
+    await participant.respond(
+        TurnRequest(
+            run_id="run",
+            phase=InvestigationPhase.INDEPENDENT,
+            question="Why?",
+            workspace=tmp_path,
+            agent_id="investigate",
+            workflow_id="investigation",
+            tool_policy=ToolPolicy.local_read_only(),
+        )
+    )
+
+    assert [command[command.index("--tools") + 1] for command in commands] == [
+        "Read,Glob,Grep",
+        "Read,Glob,Grep",
+    ]
+
+
+def test_investigation_prompt_compacts_storage_only_evidence_metadata() -> None:
+    evidence = Evidence(
+        path="src/ego/models.py",
+        line_start=1,
+        line_end=2,
+        explanation="The contract is declared here.",
+        file_sha256="a" * 64,
+        fragment_sha256="b" * 64,
+    )
+    prompt = build_prompt(
+        TurnRequest(
+            run_id="run",
+            phase=InvestigationPhase.PEER_CHALLENGE,
+            question="Why?",
+            workspace=".",
+            agent_id="investigate",
+            workflow_id="investigation",
+            tool_policy=ToolPolicy.local_read_only(),
+            peer_investigations={
+                "codex": InvestigationDraft(
+                    findings=[
+                        {
+                            "claim": "The contract exists.",
+                            "explanation": "It is present in the model.",
+                            "evidence": [evidence],
+                            "confidence": "moderate",
+                        }
+                    ]
+                )
+            },
+        )
+    )
+
+    assert "The contract exists." in prompt
+    assert "src/ego/models.py" in prompt
+    assert "file_sha256" not in prompt
+    assert "fragment_sha256" not in prompt
 
 
 def test_opencode_explicit_model_remains_an_optional_override(
@@ -363,6 +545,42 @@ def test_claude_tools_are_limited_by_phase() -> None:
     assert independent_command[independent_command.index("--tools") + 1] == "Read,Glob,Grep"
     assert revision_command[revision_command.index("--tools") + 1] == ""
     assert revision_command[revision_command.index("--effort") + 1] == "medium"
+
+
+def test_claude_investigation_tools_are_local_read_only_for_first_three_stages() -> None:
+    participant = ClaudeParticipant(ParticipantConfig(), EgoConfig())
+    requests = [
+        TurnRequest(
+            run_id="run",
+            phase=phase,
+            question="Why?",
+            workspace=".",
+            agent_id="investigate",
+            workflow_id="investigation",
+            tool_policy=(
+                ToolPolicy.local_read_only()
+                if phase
+                in {
+                    InvestigationPhase.INDEPENDENT,
+                    InvestigationPhase.PEER_CHALLENGE,
+                    InvestigationPhase.REVISION,
+                }
+                else ToolPolicy()
+            ),
+        )
+        for phase in InvestigationPhase
+    ]
+
+    tools = [
+        command[command.index("--tools") + 1]
+        for request in requests
+        if (
+            command := participant.command("/usr/local/bin/claude", {}, request)
+        )
+    ]
+
+    assert tools[:3] == ["Read,Glob,Grep"] * 3
+    assert tools[3:] == ["", ""]
 
 
 def test_codex_extracts_reported_turn_usage() -> None:

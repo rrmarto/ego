@@ -92,6 +92,7 @@ Common interactive commands:
 | --- | --- |
 | `/help` | Show every interactive command. |
 | `/doctor` | Re-run participant and sandbox checks. |
+| `/investigate <question>` | Investigate only the active local workspace. |
 | `/summon codex opencode -- <question>` | Use selected participants. |
 | `/mode standard\|discussion\|expert` | Change the amount of visible detail. |
 | `/runs` and `/inspect <run-id>` | Review previous deliberations. |
@@ -113,6 +114,12 @@ ego summon "Review the caching strategy" --dir . \
 
 # Emit structured output
 ego ask "Review this architecture" --dir . --json
+
+# Investigate local evidence without web, commands, or modifications
+ego investigate "Why does OpenCode fail?" --dir .
+ego investigate "Why does OpenCode fail?" --dir . \
+  --participant codex --participant opencode
+ego investigate "Why does OpenCode fail?" --dir . --json
 
 # Diagnose adapters, CLI versions, authentication, and sandbox support
 ego doctor
@@ -150,6 +157,13 @@ There is no majority vote and no permanently privileged model. Invalid or
 insubstantial structured responses receive one corrective attempt; repeated
 failures are recorded and the run degrades explicitly.
 
+`InvestigateAgent` uses a separate five-stage workflow: independent
+investigation, peer challenge, investigation revision, two rotating
+cross-syntheses, and reconciliation. Its first three stages may only read and
+search the local workspace; the final two use no tools. The immutable report
+keeps findings, hypotheses, disputes, unknowns, and next checks. It never creates
+a decision or human-resolution action.
+
 Citation verification confirms that a referenced path, line range, and content
 hash match the inspected workspace. It does not prove that the model interpreted
 that source correctly. For this reason, model agreement alone cannot produce
@@ -180,8 +194,10 @@ disagreements, or evidence.
 
 ## Architecture
 
-The TUI and command-line interface depend on the same application services. The
-deliberation engine works through the `Participant` contract, so provider flags,
+The TUI and command-line interface depend on the same application services.
+`DecisionAgent` and `InvestigateAgent` select reproducible workflows through an
+explicit registry and share an `AgentRuntime`. The runtime works through the
+`Participant` contract, so provider flags,
 authentication checks, and output parsing remain inside their adapters.
 
 ```mermaid

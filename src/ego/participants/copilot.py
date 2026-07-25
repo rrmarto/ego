@@ -9,12 +9,15 @@ class CopilotParticipant(CliParticipant):
     required_help_tokens = ("--deny-tool", "--no-ask-user")
 
     def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
-        del schema, request
+        del schema
+        denied = "shell,write,url,memory,web_fetch,web_search,task,delegate,mcp"
+        if request.agent_id == "investigate" and not request.tool_policy.read:
+            denied += ",read,glob,grep,search"
         command = [
             binary,
             "--silent",
             "--no-ask-user",
-            "--deny-tool=shell,write,url,memory",
+            f"--deny-tool={denied}",
             "--excluded-tools=web_fetch,web_search",
         ]
         if self.config.model:

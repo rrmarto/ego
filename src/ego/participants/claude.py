@@ -1,6 +1,6 @@
 import json
 
-from ego.models import Phase, TurnRequest, UsageMetrics
+from ego.models import InvestigationPhase, Phase, TurnRequest, UsageMetrics
 from ego.participants.base import CliParticipant
 
 
@@ -20,10 +20,13 @@ class ClaudeParticipant(CliParticipant):
         return [binary, "auth", "status"]
 
     def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
-        tools = {
-            Phase.INDEPENDENT: "Read,Glob,Grep",
-            Phase.PEER_REVIEW: "Read,Grep",
-        }.get(request.phase, "")
+        if isinstance(request.phase, InvestigationPhase):
+            tools = "Read,Glob,Grep" if request.tool_policy.read else ""
+        else:
+            tools = {
+                Phase.INDEPENDENT: "Read,Glob,Grep",
+                Phase.PEER_REVIEW: "Read,Grep",
+            }.get(request.phase, "")
         command = [
             binary,
             "--print",

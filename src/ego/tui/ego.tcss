@@ -27,7 +27,7 @@ Screen {
 }
 
 #portrait {
-    width: 41;
+    width: 54;
     height: 21;
     color: $ego-yellow;
     content-align: center middle;

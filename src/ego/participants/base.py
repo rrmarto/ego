@@ -13,11 +13,16 @@ from typing import Protocol, cast
 from ego.config import EgoConfig, ParticipantConfig
 from ego.models import (
     AvailabilityStatus,
+    InvestigationDraft,
+    InvestigationPhase,
+    InvestigationReviewBundle,
+    InvestigationSynthesis,
     ParticipantAvailability,
     ParticipantTurnResult,
     PeerReviewBundle,
     Position,
     Synthesis,
+    ToolPolicy,
     TurnRequest,
     UsageMetrics,
 )
@@ -232,19 +237,45 @@ class CliParticipant(ABC):
         return self.config.model
 
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
+        if request.agent_id == "investigate":
+            prohibited = {
+                "web": request.tool_policy.web,
+                "shell": request.tool_policy.shell,
+                "write": request.tool_policy.write,
+                "plugins": request.tool_policy.plugins,
+                "mcp": request.tool_policy.mcp,
+                "delegation": request.tool_policy.delegation,
+            }
+            enabled = sorted(name for name, allowed in prohibited.items() if allowed)
+            if enabled:
+                raise ParticipantError(
+                    "investigation requested prohibited capabilities: " + ", ".join(enabled)
+                )
         availability = await self.probe()
         if availability.status is not AvailabilityStatus.AVAILABLE or not availability.binary:
             raise ParticipantError(availability.reason or f"{self.participant_id} is unavailable")
         model_type = response_model(request.phase)
         schema = response_schema(request.phase)
         errors: str | None = None
+        previous_response: object | None = None
         raw_outputs: list[str] = []
         duration = 0.0
         usage: UsageMetrics | None = None
-        for _ in range(2):
-            prompt = build_prompt(request, correction=errors)
+        for attempt in range(2):
+            turn_request = request
+            if (
+                attempt
+                and isinstance(request.phase, InvestigationPhase)
+                and previous_response is not None
+            ):
+                turn_request = request.model_copy(update={"tool_policy": ToolPolicy()})
+            prompt = build_prompt(
+                turn_request,
+                correction=errors,
+                previous_response=previous_response,
+            )
             try:
-                command = self.command(availability.binary, schema, request)
+                command = self.command(availability.binary, schema, turn_request)
                 try:
                     process = await run_read_only(
                         command,
@@ -267,12 +298,21 @@ class CliParticipant(ABC):
                 raise ParticipantError(f"CLI exited {process.returncode}: {detail[-1000:]}")
             try:
                 parsed = self.unwrap(self.extract_json(process.stdout))
+                previous_response = parsed
                 payload = model_type.model_validate(parsed)
                 validate_response(request, payload)
                 return ParticipantTurnResult(
                     participant_id=self.participant_id,
                     phase=request.phase,
-                    payload=cast(Position | PeerReviewBundle | Synthesis, payload),
+                    payload=cast(
+                        Position
+                        | PeerReviewBundle
+                        | Synthesis
+                        | InvestigationDraft
+                        | InvestigationReviewBundle
+                        | InvestigationSynthesis,
+                        payload,
+                    ),
                     raw_output="\n--- correction attempt ---\n".join(raw_outputs),
                     duration_seconds=duration,
                     model=self.reported_model(),

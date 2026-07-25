@@ -9,24 +9,37 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from ego.config import AppPaths
-from ego.events import DeliberationEvent, DeliberationEventStream, DeliberationEventType
+from ego.events import WorkEvent, WorkEventStream, WorkEventType
 from ego.models import (
     DecisionState,
     FinalDecision,
+    InvestigationPhase,
     JsonObject,
     ParticipantAvailability,
     ParticipantTurnResult,
     Phase,
     RunStatus,
+    WorkStage,
 )
 from ego.redaction import redact_sensitive_text
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _work_stage(value: str, agent_id: str = "decision") -> WorkStage:
+    if agent_id == "investigate":
+        return InvestigationPhase(value)
+    try:
+        return Phase(value)
+    except ValueError:
+        return InvestigationPhase(value)
 
 
 class Database:
@@ -34,7 +47,7 @@ class Database:
         self,
         paths: AppPaths,
         *,
-        event_stream: DeliberationEventStream | None = None,
+        event_stream: WorkEventStream | None = None,
     ) -> None:
         self.paths = paths
         self.event_stream = event_stream
@@ -76,6 +89,10 @@ class Database:
                         git_head_end TEXT,
                         git_status_end TEXT,
                         final_json TEXT,
+                        agent_id TEXT NOT NULL DEFAULT 'decision',
+                        workflow_id TEXT NOT NULL DEFAULT 'decision',
+                        result_kind TEXT NOT NULL DEFAULT 'decision',
+                        result_json TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
@@ -92,6 +109,9 @@ class Database:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
                         event_type TEXT NOT NULL,
+                        agent_id TEXT NOT NULL DEFAULT 'decision',
+                        workflow_id TEXT NOT NULL DEFAULT 'decision',
+                        stage TEXT,
                         participant_id TEXT,
                         payload_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
@@ -143,10 +163,10 @@ class Database:
                     CREATE INDEX calls_run_id_idx ON calls(run_id, created_at);
                     CREATE INDEX decision_resolutions_decision_id_idx
                     ON decision_resolutions(decision_id, id);
-                    PRAGMA user_version = 3;
+                    PRAGMA user_version = 4;
                     """
                 )
-                version = 3
+                version = 4
             if version < 2:
                 connection.executescript(
                     """
@@ -176,6 +196,44 @@ class Database:
                     PRAGMA user_version = 3;
                     """
                 )
+                version = 3
+            if version < 4:
+                self._add_column(
+                    connection, "runs", "agent_id", "TEXT NOT NULL DEFAULT 'decision'"
+                )
+                self._add_column(
+                    connection, "runs", "workflow_id", "TEXT NOT NULL DEFAULT 'decision'"
+                )
+                self._add_column(
+                    connection, "runs", "result_kind", "TEXT NOT NULL DEFAULT 'decision'"
+                )
+                self._add_column(connection, "runs", "result_json", "TEXT")
+                self._add_column(
+                    connection, "events", "agent_id", "TEXT NOT NULL DEFAULT 'decision'"
+                )
+                self._add_column(
+                    connection, "events", "workflow_id", "TEXT NOT NULL DEFAULT 'decision'"
+                )
+                self._add_column(connection, "events", "stage", "TEXT")
+                connection.execute(
+                    """UPDATE runs SET agent_id = 'decision', workflow_id = 'decision',
+                    result_kind = 'decision', result_json = COALESCE(result_json, final_json)"""
+                )
+                connection.execute(
+                    """UPDATE events SET agent_id = 'decision', workflow_id = 'decision',
+                    stage = COALESCE(stage, json_extract(payload_json, '$.phase'))"""
+                )
+                connection.execute("PRAGMA user_version = 4")
+
+    @staticmethod
+    def _add_column(
+        connection: sqlite3.Connection, table: str, column: str, declaration: str
+    ) -> None:
+        existing = {
+            row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def create_run(
         self,
@@ -186,6 +244,9 @@ class Database:
         parent_decision_id: str | None = None,
         git_head: str | None = None,
         git_status: str | None = None,
+        agent_id: str = "decision",
+        workflow_id: str = "decision",
+        result_kind: str = "decision",
     ) -> str:
         run_id = str(uuid.uuid4())
         now = utc_now()
@@ -193,8 +254,9 @@ class Database:
             connection.execute(
                 """INSERT INTO runs
                 (id, command, question, workspace, status, parent_decision_id,
-                 git_head_start, git_status_start, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 git_head_start, git_status_start, agent_id, workflow_id, result_kind,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     command,
@@ -204,6 +266,9 @@ class Database:
                     parent_decision_id,
                     git_head,
                     git_status,
+                    agent_id,
+                    workflow_id,
+                    result_kind,
                     now,
                     now,
                 ),
@@ -211,8 +276,13 @@ class Database:
             event = self._event(
                 connection,
                 run_id,
-                DeliberationEventType.RUN_CREATED,
-                {"command": command, "workspace": str(workspace)},
+                WorkEventType.RUN_CREATED,
+                {
+                    "command": command,
+                    "workspace": str(workspace),
+                    "agent_id": agent_id,
+                    "workflow_id": workflow_id,
+                },
             )
         self._publish(event)
         return run_id
@@ -221,18 +291,28 @@ class Database:
     def _event(
         connection: sqlite3.Connection,
         run_id: str,
-        event_type: DeliberationEventType,
+        event_type: WorkEventType,
         payload: JsonObject,
         participant_id: str | None = None,
-    ) -> DeliberationEvent:
+    ) -> WorkEvent:
         created_at = datetime.now(UTC)
+        run = connection.execute(
+            "SELECT agent_id, workflow_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run is None:
+            raise KeyError(run_id)
+        stage_value = payload.get("stage", payload.get("phase"))
         cursor = connection.execute(
             """INSERT INTO events
-            (run_id, event_type, participant_id, payload_json, created_at)
-            VALUES (?, ?, ?, ?, ?)""",
+            (run_id, event_type, agent_id, workflow_id, stage, participant_id,
+             payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 event_type.value,
+                run["agent_id"],
+                run["workflow_id"],
+                str(stage_value) if stage_value is not None else None,
                 participant_id,
                 json.dumps(payload),
                 created_at.isoformat(),
@@ -241,29 +321,35 @@ class Database:
         event_id = cursor.lastrowid
         if event_id is None:
             raise RuntimeError("SQLite did not assign an event id")
-        phase_value = payload.get("phase")
-        phase = Phase(str(phase_value)) if phase_value is not None else None
-        return DeliberationEvent(
+        phase = (
+            _work_stage(str(stage_value), str(run["agent_id"]))
+            if stage_value is not None
+            else None
+        )
+        return WorkEvent(
             event_id=event_id,
             run_id=run_id,
             event_type=event_type,
+            agent_id=run["agent_id"],
+            workflow_id=run["workflow_id"],
             participant_id=participant_id,
             phase=phase,
+            stage=str(stage_value) if stage_value is not None else None,
             payload=payload,
             created_at=created_at,
         )
 
-    def _publish(self, event: DeliberationEvent) -> None:
+    def _publish(self, event: WorkEvent) -> None:
         if self.event_stream is not None:
             self.event_stream.publish(event)
 
     def add_event(
         self,
         run_id: str,
-        event_type: DeliberationEventType,
+        event_type: WorkEventType,
         payload: JsonObject,
         participant_id: str | None = None,
-    ) -> DeliberationEvent:
+    ) -> WorkEvent:
         with self.connect() as connection:
             event = self._event(connection, run_id, event_type, payload, participant_id)
         self._publish(event)
@@ -291,18 +377,34 @@ class Database:
         status: RunStatus,
         *,
         final: FinalDecision | None = None,
+        result: BaseModel | None = None,
         git_head: str | None = None,
         git_status: str | None = None,
     ) -> None:
+        stored_result = result or final
+        serialized_result = stored_result.model_dump_json() if stored_result else None
         now = utc_now()
         with self.connect() as connection:
+            current = connection.execute(
+                "SELECT result_json FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(run_id)
+            if (
+                serialized_result is not None
+                and current["result_json"] is not None
+                and current["result_json"] != serialized_result
+            ):
+                raise ValueError("run result is immutable once stored")
             connection.execute(
                 """UPDATE runs SET status = ?, final_json = COALESCE(?, final_json),
+                result_json = COALESCE(?, result_json),
                 git_head_end = COALESCE(?, git_head_end),
                 git_status_end = COALESCE(?, git_status_end), updated_at = ? WHERE id = ?""",
                 (
                     status.value,
                     final.model_dump_json() if final else None,
+                    serialized_result,
                     git_head,
                     git_status,
                     now,
@@ -312,7 +414,7 @@ class Database:
             event = self._event(
                 connection,
                 run_id,
-                DeliberationEventType.RUN_STATUS_CHANGED,
+                WorkEventType.RUN_STATUS_CHANGED,
                 {"status": status.value},
             )
         self._publish(event)
@@ -363,9 +465,9 @@ class Database:
             event = self._event(
                 connection,
                 run_id,
-                DeliberationEventType.PARTICIPANT_TURN_COMPLETED
+                WorkEventType.PARTICIPANT_TURN_COMPLETED
                 if result
-                else DeliberationEventType.PARTICIPANT_TURN_FAILED,
+                else WorkEventType.PARTICIPANT_TURN_FAILED,
                 {
                     "call_id": call_id,
                     "phase": phase,
@@ -408,7 +510,7 @@ class Database:
             event = self._event(
                 connection,
                 final.run_id,
-                DeliberationEventType.DECISION_CREATED,
+                WorkEventType.DECISION_CREATED,
                 {"decision_id": decision_id, "state": "recommended"},
             )
         self._publish(event)
@@ -539,7 +641,8 @@ class Database:
     def list_runs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                """SELECT id, command, question, workspace, status, created_at
+                """SELECT id, command, question, workspace, status, agent_id, workflow_id,
+                result_kind, created_at
                 FROM runs ORDER BY created_at DESC"""
             ).fetchall()
         return [dict(row) for row in rows]
@@ -559,31 +662,42 @@ class Database:
                 (run_id,),
             ).fetchall()
         result = dict(run)
+        result["result"] = (
+            json.loads(result["result_json"]) if result.get("result_json") is not None else None
+        )
         result["events"] = [dict(row) for row in events]
         result["calls"] = [dict(row) for row in calls]
         return result
 
-    def get_run_events(self, run_id: str, *, after_event_id: int = 0) -> list[DeliberationEvent]:
+    def get_run_events(self, run_id: str, *, after_event_id: int = 0) -> list[WorkEvent]:
         with self.connect() as connection:
             run = connection.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone()
             if run is None:
                 raise KeyError(run_id)
             rows = connection.execute(
-                """SELECT id, run_id, event_type, participant_id, payload_json, created_at
+                """SELECT id, run_id, event_type, agent_id, workflow_id, stage,
+                participant_id, payload_json, created_at
                 FROM events WHERE run_id = ? AND id > ? ORDER BY id""",
                 (run_id, after_event_id),
             ).fetchall()
-        events: list[DeliberationEvent] = []
+        events: list[WorkEvent] = []
         for row in rows:
             payload = json.loads(row["payload_json"])
-            phase_value = payload.get("phase")
+            stage_value = row["stage"] or payload.get("stage", payload.get("phase"))
             events.append(
-                DeliberationEvent(
+                WorkEvent(
                     event_id=row["id"],
                     run_id=row["run_id"],
                     event_type=row["event_type"],
+                    agent_id=row["agent_id"],
+                    workflow_id=row["workflow_id"],
                     participant_id=row["participant_id"],
-                    phase=Phase(str(phase_value)) if phase_value is not None else None,
+                    phase=(
+                        _work_stage(str(stage_value), str(row["agent_id"]))
+                        if stage_value is not None
+                        else None
+                    ),
+                    stage=str(stage_value) if stage_value is not None else None,
                     payload=payload,
                     created_at=datetime.fromisoformat(row["created_at"]),
                 )

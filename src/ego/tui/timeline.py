@@ -5,9 +5,9 @@ from textual.containers import VerticalGroup
 from textual.widgets import Collapsible, Markdown, Static
 
 from ego.events import DeliberationEvent, DeliberationEventType
-from ego.models import Phase, Position, Synthesis
+from ego.models import InvestigationPhase, Phase, Position, Synthesis, WorkStage
 
-PHASE_TIMELINE = {
+PHASE_TIMELINE: dict[WorkStage, tuple[str, str, str]] = {
     Phase.INDEPENDENT: (
         "Independent proposals in progress",
         "Participants are preparing their responses independently.",
@@ -34,22 +34,69 @@ PHASE_TIMELINE = {
         "bold green",
     ),
 }
+PHASE_TIMELINE.update(
+    {
+        InvestigationPhase.INDEPENDENT: (
+            "Independent investigation in progress",
+            "Participants are collecting local evidence and hypotheses.",
+            "bold yellow",
+        ),
+        InvestigationPhase.PEER_CHALLENGE: (
+            "Peer challenge in progress",
+            "Participants are challenging claims and missing evidence.",
+            "bold bright_cyan",
+        ),
+        InvestigationPhase.REVISION: (
+            "Investigation revision in progress",
+            "Participants are revising or refuting hypotheses.",
+            "bold magenta",
+        ),
+        InvestigationPhase.SYNTHESIS: (
+            "Investigation synthesis in progress",
+            "Rotating participants are consolidating two reports.",
+            "bold bright_cyan",
+        ),
+        InvestigationPhase.RECONCILIATION: (
+            "Investigation reconciliation in progress",
+            "Matching and disputed findings are being preserved.",
+            "bold green",
+        ),
+    }
+)
 
-PHASE_COMPLETION_LABELS = {
+PHASE_COMPLETION_LABELS: dict[WorkStage, str] = {
     Phase.INDEPENDENT: "Proposals generated",
     Phase.PEER_REVIEW: "Cross-evaluation completed",
     Phase.REVISION: "Positions revised",
     Phase.SYNTHESIS: "Syntheses generated",
     Phase.RECONCILIATION: "Reconciliation completed",
 }
+PHASE_COMPLETION_LABELS.update(
+    {
+        InvestigationPhase.INDEPENDENT: "Independent investigations recorded",
+        InvestigationPhase.PEER_CHALLENGE: "Peer challenges completed",
+        InvestigationPhase.REVISION: "Investigations revised",
+        InvestigationPhase.SYNTHESIS: "Investigation reports consolidated",
+        InvestigationPhase.RECONCILIATION: "Investigation reconciled",
+    }
+)
 
-PHASE_COMPLETION_DETAILS = {
+PHASE_COMPLETION_DETAILS: dict[WorkStage, str] = {
     Phase.INDEPENDENT: "Independent responses are ready for the next phase.",
     Phase.PEER_REVIEW: "Peer reviews have been recorded.",
     Phase.REVISION: "Revised positions have been recorded.",
     Phase.SYNTHESIS: "Cross-syntheses have been recorded.",
     Phase.RECONCILIATION: "Remaining disagreements have been examined.",
 }
+PHASE_COMPLETION_DETAILS.update(
+    {
+        InvestigationPhase.INDEPENDENT: "Local findings and hypotheses are ready.",
+        InvestigationPhase.PEER_CHALLENGE: "Challenges and missing evidence are recorded.",
+        InvestigationPhase.REVISION: "Hypotheses were kept, changed, or refuted.",
+        InvestigationPhase.SYNTHESIS: "Consolidated facts and disputes are recorded.",
+        InvestigationPhase.RECONCILIATION: "The final auditable report is ready.",
+    }
+)
 
 PHASE_RESULT_LABELS = {
     Phase.INDEPENDENT: "proposal ready",
@@ -125,6 +172,14 @@ class DeliberationTimeline(VerticalGroup):
                 marker="●",
                 title="Recommendation ready",
                 detail="The final decision record has been created.",
+                style="bold green",
+            )
+        elif event.event_type is DeliberationEventType.RESULT_CREATED:
+            self._write_event_block(
+                event,
+                marker="●",
+                title="Investigation report ready",
+                detail="The immutable run result has been recorded.",
                 style="bold green",
             )
 

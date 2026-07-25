@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ego.events import DeliberationEvent, DeliberationEventType
-from ego.models import Phase
+from ego.models import InvestigationPhase, Phase, WorkStage
 
-PHASES = (
+PHASES: tuple[WorkStage, ...] = (
     Phase.INDEPENDENT,
     Phase.PEER_REVIEW,
     Phase.REVISION,
@@ -19,6 +19,20 @@ PHASE_LABELS = {
     Phase.REVISION: "Position revision",
     Phase.SYNTHESIS: "Cross synthesis",
     Phase.RECONCILIATION: "Reconciliation",
+}
+INVESTIGATION_PHASES: tuple[WorkStage, ...] = (
+    InvestigationPhase.INDEPENDENT,
+    InvestigationPhase.PEER_CHALLENGE,
+    InvestigationPhase.REVISION,
+    InvestigationPhase.SYNTHESIS,
+    InvestigationPhase.RECONCILIATION,
+)
+INVESTIGATION_PHASE_LABELS = {
+    InvestigationPhase.INDEPENDENT: "Independent investigation",
+    InvestigationPhase.PEER_CHALLENGE: "Peer challenge",
+    InvestigationPhase.REVISION: "Investigation revision",
+    InvestigationPhase.SYNTHESIS: "Cross synthesis",
+    InvestigationPhase.RECONCILIATION: "Reconciliation",
 }
 
 
@@ -36,17 +50,27 @@ class ParticipantState:
 class SessionState:
     run_id: str | None = None
     status: str = "ready"
-    phase: Phase | None = None
+    agent_id: str = "decision"
+    workflow_id: str = "decision"
+    phase: WorkStage | None = None
     completed_phases: int = 0
     participants: dict[str, ParticipantState] = field(default_factory=dict)
 
     @property
     def phase_label(self) -> str:
+        if isinstance(self.phase, InvestigationPhase):
+            return INVESTIGATION_PHASE_LABELS[self.phase]
         return PHASE_LABELS[self.phase] if self.phase else "Ready"
+
+    @property
+    def phases(self) -> tuple[WorkStage, ...]:
+        return INVESTIGATION_PHASES if self.agent_id == "investigate" else PHASES
 
     def reset(self, participant_ids: list[str]) -> None:
         self.run_id = None
         self.status = "starting"
+        self.agent_id = "decision"
+        self.workflow_id = "decision"
         self.phase = None
         self.completed_phases = 0
         self.participants = {name: ParticipantState() for name in participant_ids}
@@ -55,6 +79,8 @@ class SessionState:
         participant = event.participant_id
         if event.event_type is DeliberationEventType.RUN_CREATED:
             self.run_id = event.run_id
+            self.agent_id = event.agent_id
+            self.workflow_id = event.workflow_id
         elif event.event_type is DeliberationEventType.RUN_STATUS_CHANGED:
             self.status = str(event.payload["status"])
         elif event.event_type is DeliberationEventType.PARTICIPANT_PROBE_STARTED and participant:
@@ -88,9 +114,11 @@ class SessionState:
             state.status = "failed"
             state.detail = str(event.payload.get("error") or "Participant failed")
         elif event.event_type is DeliberationEventType.PHASE_COMPLETED and event.phase:
-            self.completed_phases = PHASES.index(event.phase) + 1
+            self.completed_phases = self.phases.index(event.phase) + 1
         elif event.event_type is DeliberationEventType.DECISION_CREATED:
             self.completed_phases = len(PHASES)
+        elif event.event_type is DeliberationEventType.RESULT_CREATED:
+            self.completed_phases = len(self.phases)
 
     def _participant(self, participant_id: str) -> ParticipantState:
         return self.participants.setdefault(participant_id, ParticipantState())

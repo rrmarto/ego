@@ -4,8 +4,13 @@ from collections.abc import Mapping
 
 from rich.text import Text
 
-from ego.models import FinalDecision
-from ego.tui.state import PHASE_LABELS, PHASES, ParticipantState, SessionState
+from ego.models import FinalDecision, InvestigationPhase, InvestigationReport
+from ego.tui.state import (
+    INVESTIGATION_PHASE_LABELS,
+    PHASE_LABELS,
+    ParticipantState,
+    SessionState,
+)
 
 PARTICIPANT_COLORS = {
     "available": "green",
@@ -95,7 +100,7 @@ def participant_texts(
 
 def protocol_text(session: SessionState, *, running: bool) -> Text:
     protocol = Text()
-    for index, phase in enumerate(PHASES):
+    for index, phase in enumerate(session.phases):
         if index < session.completed_phases:
             marker, color = "✓", "green"
         elif phase is session.phase and running:
@@ -103,7 +108,12 @@ def protocol_text(session: SessionState, *, running: bool) -> Text:
         else:
             marker, color = "○", "bright_black"
         protocol.append(f"{marker} ", style=f"bold {color}")
-        protocol.append(f"{PHASE_LABELS[phase]}\n", style=color)
+        label = (
+            INVESTIGATION_PHASE_LABELS[phase]
+            if isinstance(phase, InvestigationPhase)
+            else PHASE_LABELS[phase]
+        )
+        protocol.append(f"{label}\n", style=color)
     return protocol
 
 
@@ -144,4 +154,40 @@ def final_markdown(final: FinalDecision, decision_id: str, *, mode: str) -> str:
     else:
         sections.append("Use the buttons below or `/accept`, `/defer`, or `/reject`.")
     sections.append(f"_Decision record: {decision_id}_")
+    return "\n\n".join(sections)
+
+
+def investigation_markdown(report: InvestigationReport) -> str:
+    sections = [
+        "## Investigation report",
+        f"**Status:** {report.status.value}",
+    ]
+    if report.findings:
+        sections.append("### Findings")
+        for finding in report.findings:
+            sections.append(
+                f"- **{finding.claim}** ({finding.confidence.value}) — {finding.explanation}"
+            )
+            for evidence in finding.evidence:
+                sections.append(
+                    f"  - `{evidence.path}:{evidence.line_start}-{evidence.line_end}` "
+                    f"[{evidence.status.value}] — {evidence.explanation}"
+                )
+    if report.hypotheses:
+        sections.append("### Hypotheses")
+        sections.extend(
+            f"- **{item.state.value}:** {item.hypothesis} — {item.explanation}"
+            for item in report.hypotheses
+        )
+    if report.disputed_findings:
+        sections.append("### Disputed findings")
+        sections.extend(f"- {item.claim} — {item.explanation}" for item in report.disputed_findings)
+    for heading, values in (
+        ("Unknowns", report.unknowns),
+        ("Next checks", report.next_checks),
+        ("Warnings", report.warnings),
+    ):
+        if values:
+            sections.extend((f"### {heading}", *(f"- {value}" for value in values)))
+    sections.append(f"_Immutable run result: {report.run_id}_")
     return "\n\n".join(sections)

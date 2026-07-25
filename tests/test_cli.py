@@ -10,7 +10,16 @@ runner = CliRunner()
 def test_help_exposes_public_commands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for command in ("ask", "summon", "doctor", "participants", "runs", "inspect", "decisions"):
+    for command in (
+        "ask",
+        "investigate",
+        "summon",
+        "doctor",
+        "participants",
+        "runs",
+        "inspect",
+        "decisions",
+    ):
         assert command in result.stdout
 
 

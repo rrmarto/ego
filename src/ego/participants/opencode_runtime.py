@@ -8,7 +8,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from ego.models import Phase, TurnRequest
+from ego.models import InvestigationPhase, Phase, TurnRequest
 
 _SAFE_CONFIG_KEYS = frozenset(
     {
@@ -102,11 +102,14 @@ class OpenCodeRuntime:
             {
                 "agent": {
                     "ego": {
-                        "description": "Read-only decision support for Ego",
+                        "description": "Read-only workflow participant for Ego",
                         "mode": "primary",
                         "prompt": (
                             "Inspect only the target workspace named in the user prompt. "
-                            "Never edit files, run commands, use the web, or delegate."
+                            "Use direct reads and narrowly targeted searches. Never enumerate the "
+                            "whole workspace or inspect generated, dependency, VCS, or cache "
+                            "directories unless the question specifically requires it. Never edit "
+                            "files, run commands, use the web, or delegate."
                         ),
                         "permission": permissions,
                     }
@@ -172,8 +175,18 @@ def _permissions(request: TurnRequest | None) -> dict[str, object]:
         "webfetch": "deny",
         "websearch": "deny",
     }
-    if request is None or request.phase not in {Phase.INDEPENDENT, Phase.PEER_REVIEW}:
+    decision_read = request is not None and request.phase in {
+        Phase.INDEPENDENT,
+        Phase.PEER_REVIEW,
+    }
+    investigation_read = (
+        request is not None
+        and isinstance(request.phase, InvestigationPhase)
+        and request.tool_policy.read
+    )
+    if not decision_read and not investigation_read:
         return permissions
+    assert request is not None
     workspace = str(Path(request.workspace).resolve())
     workspace_access = {
         "*": "deny",
@@ -186,7 +199,7 @@ def _permissions(request: TurnRequest | None) -> dict[str, object]:
             "glob": "allow",
             "grep": "allow",
             "list": "allow",
-            "read": workspace_access,
+            "read": "allow",
         }
     )
     return permissions

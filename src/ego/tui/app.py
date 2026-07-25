@@ -15,10 +15,14 @@ from textual.widgets import Button, Markdown, OptionList, ProgressBar, Static
 from textual.worker import Worker
 
 from ego import __version__
+from ego.agents import build_agent_registry
+from ego.agents.investigate import InvestigationInput
 from ego.config import AppPaths, load_config
-from ego.deliberation import DeliberationEngine, DeliberationOutcome, NoParticipantsError
+from ego.decision import DecisionInput
+from ego.deliberation import DeliberationOutcome, NoParticipantsError
 from ego.events import DeliberationEvent, DeliberationEventStream, DeliberationEventType
-from ego.models import FinalDecision, Phase, Position, Synthesis
+from ego.investigation import InvestigationOutcome
+from ego.models import FinalDecision, InvestigationReport, Phase, Position, Synthesis
 from ego.participants import Participant, build_participants
 from ego.storage import Database
 from ego.tui.clipboard import copy_to_macos_clipboard
@@ -34,13 +38,14 @@ from ego.tui.commands import (
 from ego.tui.input import CommandPalette, QuestionInput
 from ego.tui.presentation import (
     final_markdown,
+    investigation_markdown,
     participant_texts,
     protocol_text,
     session_strip,
     session_summary,
     welcome_status,
 )
-from ego.tui.state import PHASES, ParticipantState, SessionState
+from ego.tui.state import ParticipantState, SessionState
 from ego.tui.timeline import DeliberationTimeline
 from ego.tui.views import ActiveView, WelcomeQuestionBar, WelcomeView
 from ego.workspace import resolve_workspace
@@ -82,6 +87,7 @@ class EgoApp(App[None]):
         self.active_view = False
         self.current_decision_id: str | None = None
         self.current_final: FinalDecision | None = None
+        self.current_investigation: InvestigationReport | None = None
 
     @staticmethod
     def _pending_participant() -> ParticipantState:
@@ -264,6 +270,11 @@ class EgoApp(App[None]):
                 self._write_usage(command)
             else:
                 self._start_deliberation(" ".join(arguments))
+        elif command == "/investigate":
+            if not arguments:
+                self._write_usage(command)
+            else:
+                self._start_investigation(" ".join(arguments))
         elif command == "/summon":
             self._summon(arguments)
         elif command == "/choose":
@@ -310,6 +321,16 @@ class EgoApp(App[None]):
             command=command,
             workspace=workspace or self.workspace,
             parent_decision_id=parent_decision_id,
+        )
+
+    def _start_investigation(self, question: str) -> None:
+        if self.running:
+            self._write_timeline("A workflow is already running.", style="yellow")
+            return
+        self.active_worker = self.investigate_workspace(
+            question,
+            selected=list(self.participants),
+            workspace=self.workspace,
         )
 
     def _write_usage(self, command: str) -> None:
@@ -431,15 +452,18 @@ class EgoApp(App[None]):
         try:
             database = Database(self.paths, event_stream=stream)
             database.cleanup_raw(self.config.raw_retention_days)
-            engine = DeliberationEngine(database, self.participants)
+            registry = build_agent_registry(database, self.participants)
             consumer = asyncio.create_task(self._consume_events(stream, database))
             task = asyncio.create_task(
-                engine.deliberate(
-                    question=question,
-                    workspace=workspace,
-                    participant_ids=selected,
-                    command=command,
-                    parent_decision_id=parent_decision_id,
+                registry.dispatch(
+                    "decision",
+                    DecisionInput(
+                        question=question,
+                        workspace=workspace,
+                        participant_ids=selected,
+                        command=command,
+                        parent_decision_id=parent_decision_id,
+                    ),
                 )
             )
             outcome = await task
@@ -480,6 +504,67 @@ class EgoApp(App[None]):
             self.action_focus_question()
             self._render_state()
 
+    @work(exclusive=True, group="deliberation", exit_on_error=False)
+    async def investigate_workspace(
+        self,
+        question: str,
+        *,
+        selected: list[str],
+        workspace: Path,
+    ) -> None:
+        self._begin_run(question, selected)
+        stream = DeliberationEventStream()
+        consumer: asyncio.Task[None] | None = None
+        task: asyncio.Task[InvestigationOutcome] | None = None
+        try:
+            database = Database(self.paths, event_stream=stream)
+            database.cleanup_raw(self.config.raw_retention_days)
+            registry = build_agent_registry(database, self.participants)
+            consumer = asyncio.create_task(self._consume_events(stream, database))
+            task = asyncio.create_task(
+                registry.dispatch(
+                    "investigate",
+                    InvestigationInput(
+                        question=question,
+                        workspace=workspace,
+                        participant_ids=selected,
+                    ),
+                )
+            )
+            outcome = await task
+            await consumer
+            self._render_investigation(outcome)
+        except NoParticipantsError as error:
+            if consumer is not None:
+                await consumer
+            self._write_timeline(f"Could not start: {error}", style="red")
+        except asyncio.CancelledError:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            if consumer is not None:
+                consumer.cancel()
+                with suppress(asyncio.CancelledError):
+                    await consumer
+            self._write_timeline("Investigation interrupted.", style="yellow")
+            raise
+        except Exception as error:
+            if consumer is not None and not consumer.done():
+                await consumer
+            self._write_timeline(f"Run failed: {error}", style="red")
+        finally:
+            self.running = False
+            if self.started_at is not None:
+                self.elapsed_seconds = int(monotonic() - self.started_at)
+            self.started_at = None
+            self.turn_started_at.clear()
+            question_input = self.query_one("#active-question-input", QuestionInput)
+            question_input.disabled = False
+            question_input.placeholder = "What do you want to examine next?"
+            self.action_focus_question()
+            self._render_state()
+
     async def _consume_events(
         self, stream: DeliberationEventStream, database: Database
     ) -> None:
@@ -489,6 +574,8 @@ class EgoApp(App[None]):
             self._present_event(event, database)
             self._render_state()
             if event.event_type is DeliberationEventType.DECISION_CREATED:
+                return
+            if event.event_type is DeliberationEventType.RESULT_CREATED:
                 return
             if event.event_type is DeliberationEventType.RUN_STATUS_CHANGED and event.payload.get(
                 "status"
@@ -504,6 +591,7 @@ class EgoApp(App[None]):
         self.screen.remove_class("console-only", "decision-ready", "decision-resolved")
         self.current_decision_id = None
         self.current_final = None
+        self.current_investigation = None
         self.active_view = True
         self.query_one("#welcome-view", WelcomeView).display = False
         self.query_one("#bottom-bar", WelcomeQuestionBar).display = False
@@ -550,17 +638,20 @@ class EgoApp(App[None]):
         ):
             call_id = event.payload.get("call_id")
             if isinstance(call_id, str):
+                phase = event.phase
+                if not isinstance(phase, Phase):
+                    return
                 call = database.get_call(call_id)
                 parsed_json = call.get("parsed_json")
                 if isinstance(parsed_json, str):
                     payload = (
                         Position.model_validate_json(parsed_json)
-                        if event.phase in {Phase.INDEPENDENT, Phase.REVISION}
+                        if phase in {Phase.INDEPENDENT, Phase.REVISION}
                         else Synthesis.model_validate_json(parsed_json)
                     )
                     timeline.add_phase_result(
                         participant,
-                        event.phase,
+                        phase,
                         payload,
                         duration_seconds=call.get("duration_seconds"),
                     )
@@ -589,6 +680,18 @@ class EgoApp(App[None]):
             button = self.query_one(f"#resolve-option-{index}", Button)
             button.display = contested and index <= len(outcome.final.alternatives)
         self.query_one("#accept-final", Button).display = not contested
+        self.call_after_refresh(result.scroll_visible, animate=False, top=True)
+
+    def _render_investigation(self, outcome: InvestigationOutcome) -> None:
+        self.screen.remove_class("decision-ready", "decision-resolved")
+        self.current_decision_id = None
+        self.current_final = None
+        self.current_investigation = outcome.report
+        result = self.query_one("#result", Markdown)
+        result.update(investigation_markdown(outcome.report))
+        result.display = True
+        self.query_one("#resolution-panel").display = False
+        self.query_one("#resolution-actions").display = False
         self.call_after_refresh(result.scroll_visible, animate=False, top=True)
 
     @on(Button.Pressed)
@@ -687,7 +790,8 @@ class EgoApp(App[None]):
             progress=self.session.completed_phases
         )
         self.query_one("#phase-summary", Static).update(
-            f"{self.session.completed_phases}/{len(PHASES)} · {self.session.phase_label}"
+            f"{self.session.completed_phases}/{len(self.session.phases)} · "
+            f"{self.session.phase_label}"
         )
         self.query_one("#protocol-list", Static).update(
             protocol_text(self.session, running=self.running)

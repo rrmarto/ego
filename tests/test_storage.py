@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ego.config import AppPaths
 from ego.events import DeliberationEventType
 from ego.models import (
@@ -203,6 +205,49 @@ def test_schema_one_database_is_migrated_for_human_resolutions(
             row["name"] for row in connection.execute("PRAGMA table_info(calls)").fetchall()
         }
 
-    assert version == 3
+    assert version == 4
     assert table is not None
     assert {"input_tokens", "output_tokens", "total_tokens", "cost_usd"} <= call_columns
+
+
+def test_schema_three_runs_migrate_to_decision_metadata(
+    database: Database, app_paths: AppPaths, tmp_path: Path
+) -> None:
+    run_id = database.create_run(command="ask", question="Legacy?", workspace=tmp_path)
+    result = final(run_id)
+    database.set_run_status(run_id, RunStatus.COMPLETED, final=result)
+    with database.connect() as connection:
+        connection.execute(
+            """UPDATE runs SET agent_id = 'legacy', workflow_id = 'legacy',
+            result_kind = 'legacy', result_json = NULL WHERE id = ?""",
+            (run_id,),
+        )
+        connection.execute(
+            """UPDATE events SET agent_id = 'legacy', workflow_id = 'legacy',
+            stage = NULL WHERE run_id = ?""",
+            (run_id,),
+        )
+        connection.execute("PRAGMA user_version = 3")
+
+    migrated = Database(app_paths)
+    run = migrated.get_run(run_id)
+    events = migrated.get_run_events(run_id)
+
+    assert run["agent_id"] == "decision"
+    assert run["workflow_id"] == "decision"
+    assert run["result_kind"] == "decision"
+    assert run["result"] == result.model_dump(mode="json")
+    assert all(event.agent_id == "decision" for event in events)
+
+
+def test_run_result_is_immutable_once_stored(database: Database, tmp_path: Path) -> None:
+    run_id = make_run(database, tmp_path)
+    first = final(run_id)
+    database.set_run_status(run_id, RunStatus.COMPLETED, final=first)
+
+    with pytest.raises(ValueError, match="immutable"):
+        database.set_run_status(
+            run_id,
+            RunStatus.COMPLETED,
+            final=first.model_copy(update={"recommendation": "Replace the boundary."}),
+        )

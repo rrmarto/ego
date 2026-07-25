@@ -19,6 +19,11 @@ COMMANDS = (
     CommandSpec("/help", "/help", "Show interactive commands"),
     CommandSpec("/ask", "/ask <question>", "Ask every participant"),
     CommandSpec(
+        "/investigate",
+        "/investigate <question>",
+        "Investigate the active workspace locally",
+    ),
+    CommandSpec(
         "/summon",
         "/summon codex opencode -- <question>",
         "Ask selected participants",
@@ -80,7 +85,9 @@ def runs_text(rows: Sequence[Mapping[str, Any]]) -> str:
         return "Runs:\n  No persisted runs."
     lines = ["Runs:"]
     for row in rows:
-        lines.append(f"  {row['id']}  {row['status']}")
+        lines.append(
+            f"  {row['id']}  {row['status']}  {row['agent_id']}/{row['workflow_id']}"
+        )
         lines.append(f"      {row['question']}")
     return "\n".join(lines)
 

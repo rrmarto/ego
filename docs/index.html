@@ -407,6 +407,21 @@
       </section>
 
       <section id="decision" class="section-shell section-block">
+        <div class="protocol-notes">
+          <details>
+            <summary>Workflow local de investigación</summary>
+            <div class="details-content">
+              <p>
+                <strong>Independent investigation</strong>, <strong>Peer challenge</strong>,
+                <strong>Investigation revision</strong>, <strong>Cross synthesis</strong> y
+                <strong>Reconciliation</strong> forman el segundo workflow reproducible. Las tres
+                primeras etapas solo leen y buscan localmente; las dos últimas no usan herramientas.
+                El informe conserva evidencia, hipótesis, disputas, incógnitas y próximos checks sin
+                crear acciones de resolución humana.
+              </p>
+            </div>
+          </details>
+        </div>
         <div class="section-heading">
           <div>
             <p class="eyebrow">04 / DECISION LOGIC</p>
@@ -648,11 +663,11 @@
         <div class="data-layout">
           <div class="schema-map">
             <article class="schema-table table-primary">
-              <h3>runs</h3><p>pregunta · workspace · estado · Git start/end · final</p>
+              <h3>runs</h3><p>agente · workflow · pregunta · estado · Git · resultado inmutable</p>
             </article>
             <article class="schema-table"><h3>run_participants</h3><p>estado · versión · modelo · motivo</p></article>
             <article class="schema-table"><h3>calls</h3><p>fase · duración · modelo · tokens · coste · parsed JSON</p></article>
-            <article class="schema-table"><h3>events</h3><p>tipo · participante · payload · timestamp</p></article>
+            <article class="schema-table"><h3>events</h3><p>agente · workflow · etapa · participante · payload</p></article>
             <article class="schema-table table-decision"><h3>decisions</h3><p>estado derivado · FinalDecision · supersedes</p></article>
             <article class="schema-table"><h3>decision_events</h3><p>transición append-only · nota · timestamp</p></article>
             <article class="schema-table"><h3>decision_resolutions</h3><p>alternativa o conclusión humana · nota</p></article>
@@ -688,6 +703,7 @@
           <span>participant_probe_completed</span><span>phase_started</span>
           <span>participant_turn_started</span><span>participant_turn_completed</span>
           <span>participant_turn_failed</span><span>phase_completed</span><span>decision_created</span>
+          <span>result_created</span>
         </div>
       </section>
 

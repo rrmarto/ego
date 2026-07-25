@@ -351,9 +351,10 @@ async def test_tui_suggests_and_executes_leading_slash_commands(
         await pilot.pause()
         assert palette.display
         assert [option.id for option in palette.options] == [
-            "/help",
-            "/ask",
-            "/summon",
+                "/help",
+                "/ask",
+                "/investigate",
+                "/summon",
             "/cd",
             "/pwd",
             "/mode",

@@ -34,6 +34,17 @@ class Phase(StrEnum):
     RECONCILIATION = "reconciliation"
 
 
+class InvestigationPhase(StrEnum):
+    INDEPENDENT = "independent_investigation"
+    PEER_CHALLENGE = "peer_challenge"
+    REVISION = "investigation_revision"
+    SYNTHESIS = "cross_synthesis"
+    RECONCILIATION = "reconciliation"
+
+
+WorkStage = Phase | InvestigationPhase
+
+
 class Confidence(StrEnum):
     LOW = "low"
     MODERATE = "moderate"
@@ -79,6 +90,25 @@ class Evidence(BaseModel):
     fragment_sha256: str | None = None
     status: EvidenceStatus = EvidenceStatus.UNVALIDATED
     validation_error: str | None = None
+
+
+class ToolPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    read: bool = False
+    glob: bool = False
+    grep: bool = False
+    local_search: bool = False
+    web: bool = False
+    shell: bool = False
+    write: bool = False
+    plugins: bool = False
+    mcp: bool = False
+    delegation: bool = False
+
+    @classmethod
+    def local_read_only(cls) -> ToolPolicy:
+        return cls(read=True, glob=True, grep=True, local_search=True)
 
 
 class Argument(BaseModel):
@@ -150,16 +180,88 @@ class FinalDecision(BaseModel):
         return self.requires_human_resolution or self.status is RunStatus.CONTESTED
 
 
+class InvestigationFinding(BaseModel):
+    claim: str
+    explanation: str
+    evidence: list[Evidence] = Field(default_factory=list)
+    confidence: Confidence
+
+
+class InvestigationHypothesisState(StrEnum):
+    SUPPORTED = "supported"
+    PLAUSIBLE = "plausible"
+    UNRESOLVED = "unresolved"
+    REFUTED = "refuted"
+
+
+class InvestigationHypothesis(BaseModel):
+    hypothesis: str
+    state: InvestigationHypothesisState
+    supporting_evidence: list[Evidence] = Field(default_factory=list)
+    counter_evidence: list[Evidence] = Field(default_factory=list)
+    explanation: str
+
+
+class InvestigationDraft(BaseModel):
+    findings: list[InvestigationFinding] = Field(default_factory=list)
+    hypotheses: list[InvestigationHypothesis] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+
+
+class InvestigationReview(BaseModel):
+    target_participant: str
+    valid_points: list[str] = Field(default_factory=list)
+    challenges: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    omitted_hypotheses: list[str] = Field(default_factory=list)
+
+
+class InvestigationReviewBundle(BaseModel):
+    reviews: list[InvestigationReview] = Field(default_factory=list)
+
+
+class InvestigationSynthesis(BaseModel):
+    facts: list[InvestigationFinding] = Field(default_factory=list)
+    probable_causes: list[InvestigationHypothesis] = Field(default_factory=list)
+    disputed_findings: list[InvestigationFinding] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    next_checks: list[str] = Field(default_factory=list)
+
+
+class InvestigationReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    status: RunStatus
+    question: str
+    findings: list[InvestigationFinding] = Field(default_factory=list)
+    hypotheses: list[InvestigationHypothesis] = Field(default_factory=list)
+    disputed_findings: list[InvestigationFinding] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    next_checks: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    participant_investigations: dict[str, InvestigationDraft] = Field(default_factory=dict)
+    participant_reviews: dict[str, InvestigationReviewBundle] = Field(default_factory=dict)
+    syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
+
+
 class TurnRequest(BaseModel):
     run_id: str
-    phase: Phase
+    phase: WorkStage
     question: str
     workspace: Path
+    agent_id: str = "decision"
+    workflow_id: str = "decision"
+    tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     language: str = "same as the user's question"
     own_position: Position | None = None
     peer_positions: dict[str, Position] = Field(default_factory=dict)
     peer_reviews: dict[str, list[PeerReview]] = Field(default_factory=dict)
     syntheses: dict[str, Synthesis] = Field(default_factory=dict)
+    own_investigation: InvestigationDraft | None = None
+    peer_investigations: dict[str, InvestigationDraft] = Field(default_factory=dict)
+    investigation_reviews: dict[str, list[InvestigationReview]] = Field(default_factory=dict)
+    investigation_syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
 
 
 class UsageMetrics(BaseModel):
@@ -172,8 +274,15 @@ class UsageMetrics(BaseModel):
 
 class ParticipantTurnResult(BaseModel):
     participant_id: str
-    phase: Phase
-    payload: Position | PeerReviewBundle | Synthesis
+    phase: WorkStage
+    payload: (
+        Position
+        | PeerReviewBundle
+        | Synthesis
+        | InvestigationDraft
+        | InvestigationReviewBundle
+        | InvestigationSynthesis
+    )
     raw_output: str
     duration_seconds: float
     model: str | None = None

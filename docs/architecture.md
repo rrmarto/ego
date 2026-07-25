@@ -1,6 +1,6 @@
-# Ego v1 architecture
+# Ego architecture
 
-Ego is a Python CLI and internal deliberation harness. It invokes authenticated
+Ego is a Python CLI and internal workflow harness. It invokes authenticated
 local AI CLIs; it does not call model APIs. The target directory is used in
 place and must remain read-only.
 
@@ -9,6 +9,9 @@ place and must remain read-only.
 - `cli`: one-off commands, TUI launch wiring, and non-interactive rendering.
 - `tui`: full-screen interactive workflow and live event presentation.
 - `shell`: legacy line-oriented interaction kept isolated from the harness.
+- `agents`: specialized-agent contracts, explicit registry, and common runtime.
+- `decision`: compatibility adapter for the existing decision workflow.
+- `investigation`: local-only investigation workflow and report finalization.
 - `participants`: provider-specific probing and command construction.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.
@@ -16,9 +19,22 @@ place and must remain read-only.
 - `events`: typed, real-time observation of committed deliberation events.
 - `storage`: SQLite migrations, append-only events, raw-output retention.
 
-The harness depends on the `Participant` protocol, not provider classes. HTTP
+The runtime depends on the `Participant` protocol, not provider classes. Provider
+CLIs remain participants rather than specialized agents. HTTP
 participants may implement the same protocol in a later version; v1 includes no
 HTTP client or provider API configuration.
+
+## Specialized agents and workflows
+
+`SpecializedAgent` declares an identifier, description, input and output
+contracts, required capabilities, and exactly one workflow. The explicit
+registry exposes `decision` → `DecisionWorkflow` and `investigate` →
+`InvestigationWorkflow`. Automatic routing is intentionally absent.
+
+`AgentRuntime` owns participant discovery, mandatory Seatbelt checks, parallel
+turns, committed events, call persistence, cancellation propagation,
+provider-reported metrics, and corrective attempts. Workflows retain their
+stages, schemas, prompts, and tool policies.
 
 ## Deliberation invariant
 
@@ -42,6 +58,31 @@ the user and requires a separate human resolution: select an alternative,
 record a custom conclusion, defer, or reject. That resolution is appended to
 the decision history and never rewrites the original disagreement.
 
+## Investigation invariant
+
+Investigation executes `independent_investigation`, `peer_challenge`,
+`investigation_revision`, `cross_synthesis`, and `reconciliation`. The first
+three allow only local read, glob, grep, and search. The final two receive
+structured context and no tools. Web tools, URL fetching, writes, plugins, MCP,
+delegation, project commands, tests, builds, and implementation are outside the
+workflow contract. Provider transport remains available because participant
+CLIs may use remote models; it is not exposed as a research tool.
+
+Two rotating participants normally produce consolidated reports.
+Reconciliation merges matching findings and keeps conflicts under
+`disputed_findings`; investigation disagreement never creates alternatives or
+a human decision. A backed useful report is `completed`. Insufficient evidence,
+critical stale evidence, or material degradation is `inconclusive`.
+
+Investigation prompts carry the complete material conclusions from prior
+stages, while omitting citation hashes used only for local persistence and
+integrity checks. Exact duplicate intermediate items are removed. If a
+participant returns an invalid but recoverable structured investigation
+response, its single corrective attempt receives the prior response and
+validation error with all tools disabled; it repairs the record instead of
+inspecting the workspace again. A response that cannot be decoded retains the
+existing full corrective fallback.
+
 ## Safety invariant
 
 An adapter is runnable only when its binary exists, its version exposes the
@@ -60,9 +101,11 @@ authentication copy. Each OpenCode call uses isolated HOME and XDG directories
 with a private authentication copy, model-selection state, and only the
 `model`/provider subset of the user's configuration. OpenCode plugins, MCP
 servers, agents, commands, and tools are not inherited; its project root is a
-neutral temporary directory rather than the inspected workspace. OpenCode owns
-its normal default-model resolution unless Ego configuration explicitly
-provides a model override.
+neutral temporary directory rather than the inspected workspace. Direct reads
+are enabled only when the stage permits them, while `external_directory`
+confines file tools to the target workspace and the external Seatbelt boundary
+continues to deny writes. OpenCode owns its normal default-model resolution
+unless Ego configuration explicitly provides a model override.
 Subprocess environments are provider-specific; no participant receives another
 provider's credential variables. This changes only processes launched by Ego;
 it does not modify global CLI or macOS configuration. There is no
@@ -75,6 +118,9 @@ inconclusive; other changes cap confidence and are surfaced to the user.
 ## Persistence
 
 SQLite stores runs, participants, calls, events, decisions, and decision events.
+Runs identify their agent, workflow, result kind, and immutable structured
+result. Historical runs migrate to `decision` / `decision`. The decisions table
+remains exclusive to `DecisionAgent`.
 Raw responses are files referenced by calls and expire after 30 days. Records
 are append-only except for derived run and decision status columns, which are
 updated in the same transaction as their corresponding event.
@@ -89,7 +135,8 @@ Human resolutions are stored as append-only structured records containing the
 selected alternative or custom conclusion. A contested decision cannot move to
 accepted without one of those records.
 
-Each persisted deliberation event may also be published to an optional in-process
+Each persisted `WorkEvent` identifies its agent, workflow, and stage and may
+also be published to an optional in-process
 async queue. Persistence always commits before publication. The queue is a live
 delivery mechanism for interfaces; SQLite remains the auditable source of truth
 and can replay events incrementally by event identifier.

@@ -7,6 +7,7 @@ from textual.widgets import Button, Markdown, ProgressBar, Static
 from ego import __version__
 from ego.tui.assets import PORTRAIT, WORDMARK
 from ego.tui.input import CommandPalette, QuestionInput
+from ego.tui.portrait import halfcell_portrait
 from ego.tui.state import PHASES
 from ego.tui.timeline import DeliberationTimeline
 
@@ -14,7 +15,8 @@ from ego.tui.timeline import DeliberationTimeline
 class WelcomeView(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="welcome-hero"):
-            yield Static(PORTRAIT, id="portrait")
+            portrait = halfcell_portrait() if self.app.console.color_system else PORTRAIT
+            yield Static(portrait, id="portrait")
             with Vertical(id="welcome-copy"):
                 yield Static(
                     "“  Fact: Collaboration is just multiple people\n"
