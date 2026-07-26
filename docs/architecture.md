@@ -7,6 +7,7 @@ place and must remain read-only.
 ## Boundaries
 
 - `cli`: one-off commands, TUI launch wiring, and non-interactive rendering.
+- `bridge`: versioned JSON request and JSONL event/result framing for native clients.
 - `tui`: full-screen interactive workflow and live event presentation.
 - `shell`: legacy line-oriented interaction kept isolated from the harness.
 - `agents`: specialized-agent contracts, explicit registry, and common runtime.
@@ -23,6 +24,26 @@ The runtime depends on the `Participant` protocol, not provider classes. Provide
 CLIs remain participants rather than specialized agents. HTTP
 participants may implement the same protocol in a later version; v1 includes no
 HTTP client or provider API configuration.
+
+## Native client bridge
+
+`ego bridge` is the integration boundary for a native macOS client. The client
+writes one protocol-versioned request to standard input. Ego resolves the real
+workspace, selects the explicitly requested specialized agent, executes its
+registered workflow, persists the run, and emits newline-delimited frames on
+standard output.
+
+The stream begins with `accepted`, may contain any number of `event` frames, and
+ends with exactly one `result`, `error`, or `cancelled` frame. `event` embeds the
+same `WorkEvent` contract used by the TUI and is emitted only after its SQLite
+transaction commits. The schema is discoverable with `ego bridge --schema`.
+
+The bridge owns neither a second workflow implementation nor a second storage
+model. Native clients must not read SQLite, parse TUI text, invoke providers, or
+reproduce sandbox policy. They identify the desired agent explicitly; automatic
+routing remains deferred. Process cancellation propagates into the active
+workflow, which persists the run as interrupted before the bridge emits
+`cancelled`.
 
 ## Specialized agents and workflows
 

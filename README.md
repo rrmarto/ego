@@ -137,6 +137,30 @@ ego reconsider <decision-id> "The deployment target changed to macOS only"
 
 Run `ego --help` or `ego <command> --help` for the complete option reference.
 
+### macOS subprocess bridge
+
+A native macOS client can execute the same agents and workflows through a
+versioned subprocess contract. It sends one JSON request on standard input and
+reads newline-delimited JSON frames from standard output:
+
+```bash
+echo '{"protocol_version":1,"request_id":"mac-1","agent_id":"investigate","question":"Why does OpenCode fail?","workspace":"/absolute/path/to/workspace","participant_ids":[]}' | ego bridge
+```
+
+An empty `participant_ids` array selects every configured participant. Frames
+are emitted as `accepted`, committed `event` records, and one terminal
+`result`, `error`, or `cancelled` record. The current JSON schemas are available
+without starting a run:
+
+```bash
+ego bridge --schema
+```
+
+The client should treat Ego as the authority for execution, persistence,
+sandboxing, and results. It must not read Ego's SQLite database or invoke
+provider CLIs directly. Sending `SIGINT` to the bridge cancels the active
+workflow and persists the run as interrupted.
+
 ## Deliberation protocol
 
 Every available participant receives the same question and follows the same
@@ -202,7 +226,7 @@ authentication checks, and output parsing remain inside their adapters.
 
 ```mermaid
 flowchart LR
-    User[User] --> Interfaces[Textual TUI / Typer CLI]
+    User[User] --> Interfaces[Textual TUI / Typer CLI / macOS bridge]
 
     subgraph Harness[Ego deliberation harness]
         Engine[Deliberation engine]
@@ -232,7 +256,7 @@ flowchart LR
 
 | Area | Responsibility | Source |
 | --- | --- | --- |
-| Interfaces | TUI state, timeline, commands, and non-interactive rendering | [`src/ego/tui`](src/ego/tui), [`src/ego/cli.py`](src/ego/cli.py) |
+| Interfaces | TUI state, timeline, commands, non-interactive rendering, and the versioned JSONL bridge | [`src/ego/tui`](src/ego/tui), [`src/ego/cli.py`](src/ego/cli.py), [`src/ego/bridge.py`](src/ego/bridge.py) |
 | Deliberation | Phase barriers, failure handling, synthesis, and reconciliation | [`src/ego/deliberation`](src/ego/deliberation) |
 | Participants | Provider probing, command construction, structured output, and usage extraction | [`src/ego/participants`](src/ego/participants) |
 | Safety boundary | Subprocess limits, reduced environments, and macOS Seatbelt enforcement | [`src/ego/runner.py`](src/ego/runner.py), [`src/ego/sandbox.py`](src/ego/sandbox.py) |

@@ -8,13 +8,22 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 
 from ego import __version__
 from ego.agents import build_agent_registry
 from ego.agents.investigate import InvestigationInput
+from ego.bridge import (
+    BridgeRequest,
+    BridgeRuntime,
+    JsonlWriter,
+    bridge_contract_schema,
+    invalid_request_frame,
+)
 from ego.config import AppPaths, EgoConfig, load_config
 from ego.decision import DecisionInput
 from ego.deliberation import NoParticipantsError
+from ego.events import WorkEventStream
 from ego.models import AvailabilityStatus, FinalDecision, InvestigationReport
 from ego.participants import Participant, build_participants
 from ego.shell import InteractiveShell, ShellActions
@@ -73,6 +82,38 @@ def emit_json(value: Any) -> None:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     typer.echo(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+@app.command()
+def bridge(
+    schema: Annotated[
+        bool,
+        typer.Option("--schema", help="Print the versioned bridge contract and exit."),
+    ] = False,
+) -> None:
+    """Run one specialized-agent request over the macOS JSONL bridge."""
+    if schema:
+        emit_json(bridge_contract_schema())
+        return
+
+    writer = JsonlWriter(typer.echo)
+    try:
+        request = BridgeRequest.model_validate_json(sys.stdin.read())
+    except (ValidationError, ValueError) as error:
+        writer.emit(invalid_request_frame(str(error)))
+        raise typer.Exit(2) from None
+
+    paths = AppPaths.resolve()
+    config = load_config(paths)
+    event_stream = WorkEventStream()
+    database = Database(paths, event_stream=event_stream)
+    database.cleanup_raw(config.raw_retention_days)
+    participants = build_participants(config)
+    exit_code = asyncio.run(
+        BridgeRuntime(database, participants, event_stream, writer).execute(request)
+    )
+    if exit_code:
+        raise typer.Exit(exit_code)
 
 
 def launch_interactive_shell() -> None:
