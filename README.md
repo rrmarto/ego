@@ -23,6 +23,7 @@ Ego v0.1.0:
 - validates cited paths, line ranges, and file fragments against the workspace;
 - persists runs, normalized model responses, decisions, and human resolutions;
 - reports provider usage when a CLI exposes token or cost information;
+- exposes authenticated foreground diagnostics on IPv4 loopback for sandboxed clients;
 - supports interactive inspection through a Textual TUI and JSON output through
   the command line.
 
@@ -66,6 +67,11 @@ local source tree:
 ```bash
 uv tool install --force --editable .
 ```
+
+For a stable background service, prefer the normal global installation. Its
+public executable is normally the stable symlink `~/.local/bin/ego`. A local
+`.venv/bin/ego` is also supported for development, but it is tied to that
+checkout and virtual environment.
 
 ## Quick start
 
@@ -160,6 +166,94 @@ The client should treat Ego as the authority for execution, persistence,
 sandboxing, and results. It must not read Ego's SQLite database or invoke
 provider CLIs directly. Sending `SIGINT` to the bridge cancels the active
 workflow and persists the run as interrupted.
+
+### Authenticated local service
+
+Sandboxed native clients must not spawn Ego because child processes inherit the
+client’s App Sandbox and cannot apply Ego's mandatory Seatbelt profile. Ego can
+instead install its own per-user LaunchAgent once:
+
+```bash
+ego service install
+ego service status
+ego service uninstall
+```
+
+`service install` is the single user activation. It records the absolute Ego
+executable and effective data directory, installs
+`~/Library/LaunchAgents/com.rrmarto.ego.service.plist`, and asks launchd to
+start and supervise the service during the user's session. Repeating it updates
+the recorded path/configuration and restarts the service safely. Roma Desk
+never starts Ego or opens a Terminal; it is only an authenticated TCP client.
+
+The service listens only on `127.0.0.1:37645` by default. Configure the port
+with `[service].port` in `config.toml`; no host option exists. The foreground
+`ego service run` command remains available for development and launchd uses
+that exact runtime internally.
+
+Prefer running install from the stable global executable:
+
+```bash
+~/.local/bin/ego service install
+```
+
+For development, this is also valid:
+
+```bash
+/Users/marto/FlutterDev/proyectos/MyApps/ego/.venv/bin/ego service install
+```
+
+The global symlink is retained without resolving uv's replaceable internal
+environment. If the repository moves or `.venv` is rebuilt, run
+`ego service install` again from the new development executable. Status reports
+a stale recorded path. Uninstall removes only the known plist; credentials,
+configuration, SQLite data, logs, and the Ego installation remain.
+
+Standard output and error are separate private files in Ego's data directory:
+
+```text
+service.stdout.log
+service.stderr.log
+```
+
+Use `ego service status` to print their full paths. The plist uses a closed GUI
+`PATH`, preserves the effective `EGO_DATA_DIR`, and never contains the service
+credential.
+
+Ego creates a 256-bit credential in its application-data directory with
+user-only permissions. Print it for an explicit client setup, or rotate it:
+
+```bash
+ego service token
+ego service token --regenerate
+```
+
+Treat this output as a secret. The service never receives the token itself over
+TCP. Each connection starts with an `authentication_challenge` frame. The
+client validates:
+
+```text
+HMAC-SHA256(token, "server:" + nonce)
+```
+
+and sends an authentication proof bound to its request:
+
+```text
+HMAC-SHA256(token, "client:" + nonce + ":1:" + request_id + ":" + method)
+```
+
+Version 1 accepts only `diagnostic` and `schema`. A diagnostic response contains
+the service, Ego, and bridge protocol versions; the running Ego executable;
+Seatbelt status; participant status, binary, version, authentication,
+capabilities, and reason; and structured actionable errors. It does not execute
+Decision or Investigation, expose history, or accept commands or argv.
+
+The complete request and frame schemas are available without starting the
+server:
+
+```bash
+ego service schema
+```
 
 ## Deliberation protocol
 
@@ -309,6 +403,12 @@ example:
 ```toml
 raw_retention_days = 30
 output_limit_bytes = 5242880
+
+[service]
+port = 37645
+max_message_bytes = 65536
+request_timeout_seconds = 10
+diagnostic_timeout_seconds = 30
 
 [participants.codex]
 enabled = true

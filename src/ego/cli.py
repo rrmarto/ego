@@ -5,7 +5,7 @@ import json
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -26,6 +26,16 @@ from ego.deliberation import NoParticipantsError
 from ego.events import WorkEventStream
 from ego.models import AvailabilityStatus, FinalDecision, InvestigationReport
 from ego.participants import Participant, build_participants
+from ego.service import EgoServiceServer, ServiceRuntime, run_service_until_stopped
+from ego.service_auth import ServiceCredentialStore
+from ego.service_contract import service_contract_schema
+from ego.service_launchd import (
+    LaunchAgentInfo,
+    LaunchAgentState,
+    ServiceLaunchAgent,
+    ServiceLaunchdError,
+    resolve_install_executable,
+)
 from ego.shell import InteractiveShell, ShellActions
 from ego.storage import Database
 from ego.workspace import resolve_workspace
@@ -41,7 +51,9 @@ app = typer.Typer(help="Structured decisions across local AI CLIs.")
 decisions_app = typer.Typer(
     help="List and transition Ego Decision Records.", invoke_without_command=True
 )
+service_app = typer.Typer(help="Run and inspect the authenticated local Ego service.")
 app.add_typer(decisions_app, name="decisions")
+app.add_typer(service_app, name="service")
 
 
 def version_callback(value: bool) -> None:
@@ -114,6 +126,133 @@ def bridge(
     )
     if exit_code:
         raise typer.Exit(exit_code)
+
+
+@service_app.command("run")
+def service_run(
+    port: Annotated[
+        int | None,
+        typer.Option("--port", min=1, max=65535, help="Loopback TCP port."),
+    ] = None,
+) -> None:
+    """Run the authenticated Ego service in the foreground on 127.0.0.1."""
+    paths = AppPaths.resolve()
+    config = load_config(paths)
+    credentials = ServiceCredentialStore(paths)
+    credentials.get_or_create()
+    runtime = ServiceRuntime(
+        build_participants(config),
+        credentials,
+        diagnostic_timeout_seconds=config.service.diagnostic_timeout_seconds,
+    )
+    server = EgoServiceServer(
+        runtime,
+        port=port or config.service.port,
+        max_message_bytes=config.service.max_message_bytes,
+        request_timeout_seconds=config.service.request_timeout_seconds,
+    )
+    asyncio.run(run_service_until_stopped(server))
+
+
+def service_launch_agent() -> ServiceLaunchAgent:
+    paths = AppPaths.resolve()
+    return ServiceLaunchAgent(
+        paths,
+        load_config(paths),
+        executable=resolve_install_executable(),
+    )
+
+
+def render_launch_agent_info(info: LaunchAgentInfo) -> None:
+    typer.echo(f"Plist: {info.plist_path}")
+    typer.echo(f"Executable: {info.executable}")
+    typer.echo(f"Endpoint: {info.endpoint}")
+    typer.echo(f"Standard output: {info.stdout_path}")
+    typer.echo(f"Standard error: {info.stderr_path}")
+    if info.editable_install:
+        typer.echo(
+            "WARNING: This LaunchAgent uses an editable .venv installation. "
+            "Run `ego service install` again if the repository moves or .venv is rebuilt.",
+            err=True,
+        )
+
+
+def fail_service_launchd(error: ServiceLaunchdError) -> NoReturn:
+    typer.echo(f"Ego Service error [{error.code}]: {error}", err=True)
+    raise typer.Exit(1)
+
+
+@service_app.command("install")
+def service_install() -> None:
+    """Install or update Ego's user LaunchAgent and start the service."""
+    try:
+        info = service_launch_agent().install()
+    except ServiceLaunchdError as error:
+        fail_service_launchd(error)
+    typer.echo("Ego Service LaunchAgent installed and authenticated.")
+    render_launch_agent_info(info)
+
+
+@service_app.command("status")
+def service_status() -> None:
+    """Show LaunchAgent and authenticated service availability."""
+    try:
+        status = service_launch_agent().status()
+    except ServiceLaunchdError as error:
+        fail_service_launchd(error)
+    headings = {
+        LaunchAgentState.NOT_INSTALLED: "Ego Service is not installed.",
+        LaunchAgentState.INSTALLED_NOT_LOADED: "Ego Service is installed but not loaded.",
+        LaunchAgentState.LOADED_UNAVAILABLE: "Ego Service is loaded but unavailable.",
+        LaunchAgentState.AUTHENTICATED: "Ego Service is available and authenticated.",
+        LaunchAgentState.INVALID_PROOF: "Ego Service server proof is incorrect.",
+        LaunchAgentState.INCOMPATIBLE: "The service endpoint is incompatible with Ego.",
+    }
+    typer.echo(headings[status.state])
+    typer.echo(f"Detail: {status.detail}")
+    render_launch_agent_info(status.info)
+    if status.executable_stale:
+        typer.echo(
+            "ACTION: Run `ego service install` from the current Ego installation "
+            "to replace the stale executable path.",
+            err=True,
+        )
+    if status.state is not LaunchAgentState.AUTHENTICATED:
+        raise typer.Exit(1)
+
+
+@service_app.command("uninstall")
+def service_uninstall() -> None:
+    """Stop Ego Service and remove only Ego's known LaunchAgent plist."""
+    try:
+        agent = service_launch_agent()
+        removed = agent.uninstall()
+    except ServiceLaunchdError as error:
+        fail_service_launchd(error)
+    if removed:
+        typer.echo(f"Ego Service LaunchAgent removed: {agent.plist_path}")
+    else:
+        typer.echo("Ego Service LaunchAgent was already uninstalled.")
+    typer.echo("Credential, configuration, database, and logs were preserved.")
+
+
+@service_app.command("schema")
+def service_schema() -> None:
+    """Print the versioned service contract without starting the server."""
+    emit_json(service_contract_schema())
+
+
+@service_app.command("token")
+def service_token(
+    regenerate: Annotated[
+        bool,
+        typer.Option("--regenerate", help="Replace the current service credential."),
+    ] = False,
+) -> None:
+    """Print the local service credential; treat stdout as secret."""
+    credentials = ServiceCredentialStore(AppPaths.resolve())
+    token = credentials.regenerate() if regenerate else credentials.get_or_create()
+    typer.echo(token)
 
 
 def launch_interactive_shell() -> None:

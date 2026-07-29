@@ -19,7 +19,16 @@ def test_help_exposes_public_commands() -> None:
         "runs",
         "inspect",
         "decisions",
+        "service",
     ):
+        assert command in result.stdout
+
+
+def test_service_help_exposes_lifecycle_commands() -> None:
+    result = runner.invoke(app, ["service", "--help"])
+
+    assert result.exit_code == 0
+    for command in ("install", "status", "uninstall", "run", "schema", "token"):
         assert command in result.stdout
 
 

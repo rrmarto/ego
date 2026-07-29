@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -71,7 +72,23 @@ class CliParticipant(ABC):
         if configured:
             path = Path(configured).expanduser()
             return str(path.resolve()) if path.is_file() else None
-        return shutil.which(self.default_binary)
+        discovered = shutil.which(self.default_binary)
+        if discovered:
+            return discovered
+        search_roots = (
+            Path(sys.executable).resolve().parent,
+            Path.home() / ".local" / "bin",
+            Path.home() / ".codex" / "packages" / "standalone" / "current" / "bin",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+            Path("/bin"),
+        )
+        for root in search_roots:
+            candidate = root / self.default_binary
+            if candidate.is_file():
+                return str(candidate.resolve())
+        return None
 
     @contextmanager
     def probe_environment(self) -> Iterator[dict[str, str]]:
