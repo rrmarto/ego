@@ -29,6 +29,8 @@ from ego.participants import Participant, build_participants
 from ego.service import EgoServiceServer, ServiceRuntime, run_service_until_stopped
 from ego.service_auth import ServiceCredentialStore
 from ego.service_contract import service_contract_schema
+from ego.service_decisions import ServiceDecisionLifecycle
+from ego.service_history import ServiceHistory
 from ego.service_launchd import (
     LaunchAgentInfo,
     LaunchAgentState,
@@ -36,8 +38,10 @@ from ego.service_launchd import (
     ServiceLaunchdError,
     resolve_install_executable,
 )
+from ego.service_runs import ActiveRunCoordinator
 from ego.shell import InteractiveShell, ShellActions
 from ego.storage import Database
+from ego.workflow_execution import WorkflowExecutionRuntime
 from ego.workspace import resolve_workspace
 
 
@@ -140,10 +144,20 @@ def service_run(
     config = load_config(paths)
     credentials = ServiceCredentialStore(paths)
     credentials.get_or_create()
+    event_stream = WorkEventStream()
+    database = Database(paths, event_stream=event_stream)
+    database.cleanup_raw(config.raw_retention_days)
+    participants = build_participants(config)
+    coordinator = ActiveRunCoordinator(
+        WorkflowExecutionRuntime(database, participants, event_stream)
+    )
     runtime = ServiceRuntime(
-        build_participants(config),
+        participants,
         credentials,
         diagnostic_timeout_seconds=config.service.diagnostic_timeout_seconds,
+        run_coordinator=coordinator,
+        history=ServiceHistory(database),
+        decisions=ServiceDecisionLifecycle(database),
     )
     server = EgoServiceServer(
         runtime,

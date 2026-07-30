@@ -884,6 +884,7 @@ h1 em {
 .method-list {
   display: flex;
   min-height: 126px;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: 20px;

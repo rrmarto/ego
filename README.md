@@ -23,7 +23,8 @@ Ego v0.1.0:
 - validates cited paths, line ranges, and file fragments against the workspace;
 - persists runs, normalized model responses, decisions, and human resolutions;
 - reports provider usage when a CLI exposes token or cost information;
-- exposes authenticated foreground diagnostics on IPv4 loopback for sandboxed clients;
+- exposes authenticated diagnostics, workflow streams, recovery, and human Decision
+  actions on IPv4 loopback for sandboxed clients;
 - supports interactive inspection through a Textual TUI and JSON output through
   the command line.
 
@@ -242,11 +243,17 @@ and sends an authentication proof bound to its request:
 HMAC-SHA256(token, "client:" + nonce + ":1:" + request_id + ":" + method)
 ```
 
-Version 1 accepts only `diagnostic` and `schema`. A diagnostic response contains
-the service, Ego, and bridge protocol versions; the running Ego executable;
-Seatbelt status; participant status, binary, version, authentication,
-capabilities, and reason; and structured actionable errors. It does not execute
-Decision or Investigation, expose history, or accept commands or argv.
+Version 1 preserves `diagnostic` and `schema` and adds a closed set of typed
+methods:
+
+- `run.start` and `run.cancel` for explicit Decision or Investigation workflows;
+- `runs.list`, `runs.get`, and `runs.events` for global recovery;
+- `decision.transition` and `decision.resolve` for append-only human actions.
+
+Only one workflow runs at a time. A disconnected stream does not cancel its
+Ego-owned task; the client recovers committed state through history and events.
+There is no generic command, argv, shell, provider, or SQLite method, and no
+service action implements a recommendation.
 
 The complete request and frame schemas are available without starting the
 server:
@@ -257,9 +264,9 @@ ego service schema
 
 External application authors should use the complete
 [Ego Service integration guide](docs/external-service.md). It documents
-LaunchAgent ownership, lifecycle states, the HMAC handshake, diagnostic
-semantics, client responsibilities, logs, and stable versus editable
-installations.
+LaunchAgent ownership, lifecycle states, the HMAC handshake, streaming,
+cancellation, history, Decision actions, client responsibilities, logs, and
+stable versus editable installations.
 
 ## Deliberation protocol
 

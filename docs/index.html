@@ -133,14 +133,14 @@
               <article class="architecture-node accent-cyan">
                 <span class="node-kicker">SANDBOXED CLIENTS</span>
                 <h3>External applications</h3>
-                <p>Validate Ego's server proof and consume diagnostic or schema over loopback.</p>
+                <p>Validate Ego's server proof and consume typed workflow, history, or diagnostic frames.</p>
                 <code>service protocol v1</code>
               </article>
             </div>
           </div>
 
           <div class="layer-connector harness-connector" aria-hidden="true">
-            <span>Typed requests / committed events / authenticated diagnostics</span>
+            <span>Typed requests / committed events / authenticated recovery</span>
           </div>
 
           <div class="harness-boundary" data-lenses="decision safety data">
@@ -265,8 +265,8 @@
           </div>
           <p>
             Ego owns the service process and its LaunchAgent. External applications remain narrow
-            TCP clients: they validate the server, request a diagnostic, and render Ego's real
-            safety and participant states.
+            TCP clients: they validate the server, submit an explicit typed method, and render
+            committed workflow, history, Decision, safety, and participant state.
           </p>
         </div>
 
@@ -346,11 +346,16 @@ client = HMAC(
           </article>
           <article class="service-contract-card">
             <p class="node-kicker">STRICT METHOD ALLOWLIST</p>
-            <h3>Observe, never dispatch</h3>
-            <div class="method-list"><code>diagnostic</code><code>schema</code></div>
+            <h3>Typed workflows, never generic execution</h3>
+            <div class="method-list">
+              <code>diagnostic · schema</code>
+              <code>run.start · run.cancel</code>
+              <code>runs.list · runs.get · runs.events</code>
+              <code>decision.transition · decision.resolve</code>
+            </div>
             <p>
-              No Decision, Investigation, workflow, command, history, workspace, participant turn,
-              or SQLite method exists.
+              One explicit Decision or Investigation may run at a time. No command, argv, shell,
+              provider, arbitrary context, raw output, or SQLite method exists.
             </p>
           </article>
         </div>
@@ -622,7 +627,9 @@ client = HMAC(
         <div class="source-grid">
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/agents/runtime.py"><span>RUNTIME</span><strong>agents/</strong><p>Agent contracts, registry, shared execution, and workflows.</p></a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/participants/base.py"><span>PROVIDERS</span><strong>participants/</strong><p>Common protocol and five provider adapters.</p></a>
-          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/service.py"><span>SERVICE</span><strong>service.py</strong><p>Authenticated loopback server and diagnostic dispatch.</p></a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/service.py"><span>SERVICE</span><strong>service.py</strong><p>Authenticated loopback transport and typed method dispatch.</p></a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/workflow_execution.py"><span>SHARED PATH</span><strong>workflow_execution.py</strong><p>One in-process workflow runtime for bridge and service.</p></a>
+          <a href="https://github.com/rrmarto/ego/blob/main/src/ego/service_runs.py"><span>RUN OWNER</span><strong>service_runs.py</strong><p>Single active run, bounded streaming, disconnect, and cancellation.</p></a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/service_launchd.py"><span>LIFECYCLE</span><strong>service_launchd.py</strong><p>Plist, launchctl lifecycle, status, and server-proof health checks.</p></a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/storage/database.py"><span>TRUTH</span><strong>storage/</strong><p>SQLite schema, events, calls, decisions, and retention.</p></a>
           <a href="https://github.com/rrmarto/ego/blob/main/src/ego/runner.py"><span>EXECUTION</span><strong>runner.py</strong><p>Bounded subprocess execution and filtered environments.</p></a>
@@ -640,6 +647,7 @@ client = HMAC(
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0009-versioned-macos-subprocess-bridge.md">0009 · macOS JSONL bridge</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0010-authenticated-loopback-service.md">0010 · authenticated loopback service</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0011-ego-owned-launchagent.md">0011 · Ego-owned LaunchAgent</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0012-authenticated-workflow-execution.md">0012 · authenticated workflow execution</a></li>
           </ol>
         </div>
       </section>

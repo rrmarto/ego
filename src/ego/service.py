@@ -20,7 +20,23 @@ from ego.sandbox import SandboxProbe
 from ego.service_auth import ServiceCredentialStore
 from ego.service_contract import (
     AuthenticationChallengeFrame,
+    DecisionResolutionResultFrame,
+    DecisionResolveParameters,
+    DecisionTransitionParameters,
+    DecisionTransitionResultFrame,
     DiagnosticResultFrame,
+    RunCancelledFrame,
+    RunCancelParameters,
+    RunCancelResult,
+    RunCancelResultFrame,
+    RunDetailResultFrame,
+    RunResultFrame,
+    RunsEventsParameters,
+    RunsEventsResultFrame,
+    RunsGetParameters,
+    RunsListParameters,
+    RunsListResultFrame,
+    RunStartParameters,
     SchemaResultFrame,
     ServiceDiagnostic,
     ServiceDiagnosticError,
@@ -30,6 +46,9 @@ from ego.service_contract import (
     ServiceSeatbeltDiagnostic,
     service_contract_schema,
 )
+from ego.service_decisions import ServiceDecisionError, ServiceDecisionLifecycle
+from ego.service_history import ServiceHistory, ServiceHistoryError
+from ego.service_runs import ActiveRunCoordinator, RunSubscription, ServiceRunError
 
 LOOPBACK_HOST = "127.0.0.1"
 SandboxProbeFactory = Callable[[], Awaitable[SandboxProbe]]
@@ -117,12 +136,18 @@ class ServiceRuntime:
         diagnostic_timeout_seconds: float,
         executable: str | None = None,
         sandbox_probe: SandboxProbeFactory = shared_sandbox_probe,
+        run_coordinator: ActiveRunCoordinator | None = None,
+        history: ServiceHistory | None = None,
+        decisions: ServiceDecisionLifecycle | None = None,
     ) -> None:
         self.participants = participants
         self.credentials = credentials
         self.diagnostic_timeout_seconds = diagnostic_timeout_seconds
         self.executable = executable or resolve_ego_executable()
         self.sandbox_probe = sandbox_probe
+        self.run_coordinator = run_coordinator
+        self.history = history
+        self.decisions = decisions
 
     def authentication_challenge(self) -> AuthenticationChallengeFrame:
         token = self.credentials.get_or_create()
@@ -132,7 +157,9 @@ class ServiceRuntime:
             proof=self.credentials.server_proof(token, nonce),
         )
 
-    async def handle_message(self, message: bytes, challenge_nonce: str) -> BaseModel:
+    def authenticate_message(
+        self, message: bytes, challenge_nonce: str
+    ) -> ServiceRequest | ServiceErrorFrame:
         request_id: str | None = None
         try:
             raw = json.loads(message)
@@ -169,11 +196,126 @@ class ServiceRuntime:
             return self._error(
                 request.request_id, "invalid_credentials", "Credential was not accepted."
             )
+        return request
+
+    async def handle_message(self, message: bytes, challenge_nonce: str) -> BaseModel:
+        request = self.authenticate_message(message, challenge_nonce)
+        if isinstance(request, ServiceErrorFrame):
+            return request
+        return await self.handle_request(request)
+
+    async def handle_request(self, request: ServiceRequest) -> BaseModel:
         if request.method == "schema":
             return SchemaResultFrame(
                 request_id=request.request_id,
                 result=service_contract_schema(),
             )
+        if request.method == "run.cancel":
+            if self.run_coordinator is None:
+                return self._error(
+                    request.request_id,
+                    "workflow_unavailable",
+                    "Workflow execution is not configured for this service runtime.",
+                )
+            params = request.params
+            if not isinstance(params, RunCancelParameters):
+                return self._error(
+                    request.request_id,
+                    "invalid_request",
+                    "run.cancel requires a target_request_id.",
+                )
+            try:
+                run_id = await self.run_coordinator.cancel(params.target_request_id)
+            except ServiceRunError as error:
+                return self._error(
+                    request.request_id,
+                    error.code,
+                    str(error),
+                    retryable=error.retryable,
+                )
+            return RunCancelResultFrame(
+                request_id=request.request_id,
+                result=RunCancelResult(
+                    target_request_id=params.target_request_id,
+                    run_id=run_id,
+                ),
+            )
+        if request.method == "run.start":
+            return self._error(
+                request.request_id,
+                "stream_required",
+                "run.start must be handled as a streaming service request.",
+            )
+        if request.method in {"runs.list", "runs.get", "runs.events"}:
+            if self.history is None:
+                return self._error(
+                    request.request_id,
+                    "history_unavailable",
+                    "Run history is not configured for this service runtime.",
+                )
+            try:
+                if request.method == "runs.list":
+                    params = request.params
+                    if not isinstance(params, RunsListParameters):
+                        raise ServiceHistoryError(
+                            "invalid_request", "runs.list parameters are invalid."
+                        )
+                    return RunsListResultFrame(
+                        request_id=request.request_id,
+                        result=self.history.list_runs(params),
+                    )
+                if request.method == "runs.get":
+                    params = request.params
+                    if not isinstance(params, RunsGetParameters):
+                        raise ServiceHistoryError(
+                            "invalid_request", "runs.get parameters are invalid."
+                        )
+                    return RunDetailResultFrame(
+                        request_id=request.request_id,
+                        result=self.history.get_run(params),
+                    )
+                params = request.params
+                if not isinstance(params, RunsEventsParameters):
+                    raise ServiceHistoryError(
+                        "invalid_request", "runs.events parameters are invalid."
+                    )
+                return RunsEventsResultFrame(
+                    request_id=request.request_id,
+                    result=self.history.get_events(params),
+                )
+            except ServiceHistoryError as error:
+                return self._error(request.request_id, error.code, str(error))
+        if request.method in {"decision.transition", "decision.resolve"}:
+            if self.decisions is None:
+                return self._error(
+                    request.request_id,
+                    "decision_lifecycle_unavailable",
+                    "Decision lifecycle is not configured for this service runtime.",
+                )
+            try:
+                if request.method == "decision.transition":
+                    params = request.params
+                    if not isinstance(params, DecisionTransitionParameters):
+                        raise ServiceDecisionError(
+                            "invalid_request",
+                            "decision.transition parameters are invalid.",
+                        )
+                    return DecisionTransitionResultFrame(
+                        request_id=request.request_id,
+                        result=self.decisions.transition(params),
+                    )
+                params = request.params
+                if not isinstance(params, DecisionResolveParameters):
+                    raise ServiceDecisionError(
+                        "invalid_request",
+                        "decision.resolve parameters are invalid.",
+                    )
+                return DecisionResolutionResultFrame(
+                    request_id=request.request_id,
+                    result=self.decisions.resolve(params),
+                )
+            except ServiceDecisionError as error:
+                return self._error(request.request_id, error.code, str(error))
         if request.method != "diagnostic":
             return self._error(
                 request.request_id,
@@ -261,50 +403,127 @@ class EgoServiceServer:
         try:
             challenge = self.runtime.authentication_challenge()
             await self._write(writer, challenge)
-            while True:
-                try:
-                    line = await asyncio.wait_for(
-                        reader.readline(), timeout=self.request_timeout_seconds
-                    )
-                except TimeoutError:
-                    await self._write(
-                        writer,
-                        ServiceErrorFrame(
-                            code="request_timeout",
-                            message="No complete message arrived before the request timeout.",
-                            retryable=True,
-                        ),
-                    )
-                    break
-                except ValueError:
-                    await self._write(
-                        writer,
-                        ServiceErrorFrame(
-                            code="message_too_large",
-                            message=f"Message exceeds {self.max_message_bytes} bytes.",
-                        ),
-                    )
-                    break
-                if not line:
-                    break
-                if len(line) > self.max_message_bytes:
-                    await self._write(
-                        writer,
-                        ServiceErrorFrame(
-                            code="message_too_large",
-                            message=f"Message exceeds {self.max_message_bytes} bytes.",
-                        ),
-                    )
-                    break
-                frame = await self.runtime.handle_message(
-                    line.rstrip(b"\r\n"),
-                    challenge.nonce,
-                )
-                await self._write(writer, frame)
+            line = await self._read_message(reader, writer)
+            if line is None:
+                return
+            request = self.runtime.authenticate_message(
+                line.rstrip(b"\r\n"),
+                challenge.nonce,
+            )
+            if isinstance(request, ServiceErrorFrame):
+                await self._write(writer, request)
+                return
+            if request.method == "run.start":
+                await self._stream_run(writer, request)
+                return
+            await self._write(writer, await self.runtime.handle_request(request))
+        except (ConnectionError, TimeoutError):
+            pass
         finally:
             writer.close()
             with suppress(ConnectionError):
                 await writer.wait_closed()
+
+    async def _read_message(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> bytes | None:
+        try:
+            line = await asyncio.wait_for(
+                reader.readline(), timeout=self.request_timeout_seconds
+            )
+        except TimeoutError:
+            await self._write(
+                writer,
+                ServiceErrorFrame(
+                    code="request_timeout",
+                    message="No complete message arrived before the request timeout.",
+                    retryable=True,
+                ),
+            )
+            return None
+        except ValueError:
+            await self._write(
+                writer,
+                ServiceErrorFrame(
+                    code="message_too_large",
+                    message=f"Message exceeds {self.max_message_bytes} bytes.",
+                ),
+            )
+            return None
+        if not line:
+            return None
+        if len(line) > self.max_message_bytes:
+            await self._write(
+                writer,
+                ServiceErrorFrame(
+                    code="message_too_large",
+                    message=f"Message exceeds {self.max_message_bytes} bytes.",
+                ),
+            )
+            return None
+        return line
+
+    async def _stream_run(
+        self,
+        writer: asyncio.StreamWriter,
+        request: ServiceRequest,
+    ) -> None:
+        coordinator = self.runtime.run_coordinator
+        params = request.params
+        if coordinator is None:
+            await self._write(
+                writer,
+                self.runtime._error(
+                    request.request_id,
+                    "workflow_unavailable",
+                    "Workflow execution is not configured for this service runtime.",
+                ),
+            )
+            return
+        if not isinstance(params, RunStartParameters):
+            await self._write(
+                writer,
+                self.runtime._error(
+                    request.request_id,
+                    "invalid_request",
+                    "run.start requires Decision parameters.",
+                ),
+            )
+            return
+        try:
+            subscription = await coordinator.start(request.request_id, params)
+        except ServiceRunError as error:
+            await self._write(
+                writer,
+                self.runtime._error(
+                    request.request_id,
+                    error.code,
+                    str(error),
+                    retryable=error.retryable,
+                ),
+            )
+            return
+        await self._write(writer, subscription.accepted)
+        await self._write_run_frames(writer, subscription)
+
+    async def _write_run_frames(
+        self,
+        writer: asyncio.StreamWriter,
+        subscription: RunSubscription,
+    ) -> None:
+        try:
+            while True:
+                frame = await subscription.next_frame()
+                await self._write(writer, frame)
+                if isinstance(
+                    frame,
+                    (RunResultFrame, RunCancelledFrame, ServiceErrorFrame),
+                ):
+                    return
+        finally:
+            subscription.detach()
 
     async def _write(self, writer: asyncio.StreamWriter, frame: BaseModel) -> None:
         writer.write(frame.model_dump_json().encode() + b"\n")

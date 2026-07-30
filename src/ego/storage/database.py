@@ -647,6 +647,65 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_runs_page(
+        self,
+        *,
+        limit: int,
+        before_created_at: str | None = None,
+        before_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if agent_id is not None:
+            clauses.append("agent_id = ?")
+            parameters.append(agent_id)
+        if before_created_at is not None or before_id is not None:
+            if before_created_at is None or before_id is None:
+                raise ValueError("run cursor requires both created_at and id")
+            clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            parameters.extend((before_created_at, before_created_at, before_id))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit + 1)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT id, question, workspace, status, agent_id, workflow_id,
+                result_kind, created_at, updated_at
+                FROM runs {where}
+                ORDER BY created_at DESC, id DESC LIMIT ?""",
+                parameters,
+            ).fetchall()
+        values = [dict(row) for row in rows]
+        return values[:limit], len(values) > limit
+
+    def get_public_run(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            run = connection.execute(
+                """SELECT id, question, workspace, status, agent_id, workflow_id,
+                result_kind, result_json, created_at, updated_at
+                FROM runs WHERE id = ?""",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise KeyError(run_id)
+            participants = connection.execute(
+                """SELECT participant_id, status, version, model, reason
+                FROM run_participants WHERE run_id = ? ORDER BY participant_id""",
+                (run_id,),
+            ).fetchall()
+            decision = connection.execute(
+                "SELECT id FROM decisions WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        result = dict(run)
+        serialized_result = result.pop("result_json")
+        result["result"] = json.loads(serialized_result) if serialized_result is not None else None
+        result["participants"] = [dict(row) for row in participants]
+        result["decision_id"] = decision["id"] if decision is not None else None
+        return result
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         with self.connect() as connection:
             run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
@@ -669,17 +728,27 @@ class Database:
         result["calls"] = [dict(row) for row in calls]
         return result
 
-    def get_run_events(self, run_id: str, *, after_event_id: int = 0) -> list[WorkEvent]:
+    def get_run_events(
+        self,
+        run_id: str,
+        *,
+        after_event_id: int = 0,
+        limit: int | None = None,
+    ) -> list[WorkEvent]:
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be positive")
         with self.connect() as connection:
             run = connection.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone()
             if run is None:
                 raise KeyError(run_id)
-            rows = connection.execute(
-                """SELECT id, run_id, event_type, agent_id, workflow_id, stage,
-                participant_id, payload_json, created_at
-                FROM events WHERE run_id = ? AND id > ? ORDER BY id""",
-                (run_id, after_event_id),
-            ).fetchall()
+            query = """SELECT id, run_id, event_type, agent_id, workflow_id, stage,
+            participant_id, payload_json, created_at
+            FROM events WHERE run_id = ? AND id > ? ORDER BY id"""
+            parameters: list[Any] = [run_id, after_event_id]
+            if limit is not None:
+                query = f"{query} LIMIT ?"
+                parameters.append(limit)
+            rows = connection.execute(query, parameters).fetchall()
         events: list[WorkEvent] = []
         for row in rows:
             payload = json.loads(row["payload_json"])

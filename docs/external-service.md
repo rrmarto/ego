@@ -72,13 +72,21 @@ The service binds only to IPv4 loopback. The default endpoint is
 configuration. There is no configurable host.
 
 Messages are newline-delimited JSON using service protocol version 1. The
-allowlist contains only:
+closed allowlist is:
 
 - `diagnostic`
 - `schema`
+- `run.start`
+- `run.cancel`
+- `runs.list`
+- `runs.get`
+- `runs.events`
+- `decision.transition`
+- `decision.resolve`
 
-There is no generic command, argv, shell, workflow, workspace, history, SQLite,
-Decision, or Investigation method. The executable schema is available with:
+There is no generic command, argv, shell, provider, SQLite, arbitrary context,
+attachment, or automatic-routing method. The executable schema is available
+with:
 
 ```bash
 ego service schema
@@ -131,6 +139,41 @@ Seatbelt probe deliberately attempts a prohibited write. A detail such as
 `Operation not permitted` is evidence that the write was denied as expected;
 the `safe` boolean is the authoritative result.
 
+## Workflow execution
+
+`run.start` accepts only an explicit agent identifier (`decision` or
+`investigate`), a question, an absolute workspace path, and participant
+identifiers. A successful authenticated stream is:
+
+```text
+accepted
+event*
+result | error | cancelled
+```
+
+Every frame carries the client `request_id`; committed events also carry the
+persisted `run_id`. Results use Ego's typed immutable `FinalDecision` or
+`InvestigationReport` contract and never include raw provider output or private
+rationale.
+
+Ego Service allows one active workflow. A concurrent start returns retryable
+`service_busy`. Closing the streaming connection does not cancel the workflow:
+Ego continues and persists it. Cancellation is explicit through `run.cancel`
+on another authenticated connection, targeting the active `request_id`.
+
+## History, recovery, and human decisions
+
+`runs.list` provides newest-first stable pagination and an optional agent
+filter. `runs.get` returns participants and the typed immutable result.
+`runs.events` replays bounded `WorkEvent` values after an event identifier.
+These reads cover runs created by CLI, TUI, bridge, or service without exposing
+raw output paths or internal SQLite columns.
+
+`decision.transition` records accepted, rejected, or deferred human states.
+`decision.resolve` accepts a contested result only by selecting one existing
+alternative or recording one custom human conclusion. Both reuse Ego's
+append-only Decision records. Neither method executes the recommendation.
+
 ## LaunchAgent environment and files
 
 The LaunchAgent captures a closed environment:
@@ -182,14 +225,18 @@ An external client must:
 3. decode the versioned Pydantic-compatible challenge contract;
 4. load its credential from platform-protected storage;
 5. validate the server HMAC before sending a request;
-6. send only a supported typed method;
-7. preserve participant and Seatbelt states exactly as reported;
-8. close the connection cleanly.
+6. send only a supported typed method and explicit agent identifier;
+7. consume at most one request per authenticated connection;
+8. recover disconnected runs through history and events rather than assuming cancellation;
+9. preserve participant and Seatbelt states exactly as reported;
+10. close the connection cleanly.
 
-It must not start Ego, transmit or log the credential, execute provider CLIs,
-open Ego's SQLite database, duplicate workflows, weaken Seatbelt, or convert an
-`unsafe` participant into `available`.
+It must not start Ego, transmit or log the credential, execute provider CLIs
+directly, open Ego's SQLite database, duplicate workflows, weaken Seatbelt,
+convert an `unsafe` participant into `available`, or implement a recommendation.
 
 See [ADR-0010](decisions/0010-authenticated-loopback-service.md) for the
 authenticated protocol decision and
 [ADR-0011](decisions/0011-ego-owned-launchagent.md) for the lifecycle decision.
+Workflow execution, recovery, and human lifecycle ownership are defined by
+[ADR-0012](decisions/0012-authenticated-workflow-execution.md).

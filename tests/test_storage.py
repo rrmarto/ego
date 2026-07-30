@@ -13,6 +13,8 @@ from ego.models import (
     RunStatus,
     UsageMetrics,
 )
+from ego.service_contract import RunsEventsParameters, RunsGetParameters, RunsListParameters
+from ego.service_history import ServiceHistory
 from ego.storage import Database
 
 
@@ -84,6 +86,39 @@ def test_run_events_can_be_read_incrementally(database: Database, tmp_path: Path
         DeliberationEventType.RUN_STATUS_CHANGED
     ]
     assert recent[0].payload["status"] == RunStatus.RUNNING.value
+
+
+def test_service_history_uses_bounded_public_run_models(
+    database: Database, tmp_path: Path
+) -> None:
+    first_id = make_run(database, tmp_path)
+    first_result = final(first_id)
+    database.set_run_status(first_id, RunStatus.COMPLETED, final=first_result)
+    database.create_decision(first_result)
+    second_id = make_run(database, tmp_path)
+    database.set_run_status(second_id, RunStatus.FAILED)
+    history = ServiceHistory(database)
+
+    first_page = history.list_runs(RunsListParameters(limit=1))
+    assert len(first_page.runs) == 1
+    assert first_page.next_cursor is not None
+    second_page = history.list_runs(
+        RunsListParameters(limit=1, cursor=first_page.next_cursor)
+    )
+    assert {first_page.runs[0].run_id, second_page.runs[0].run_id} == {
+        first_id,
+        second_id,
+    }
+
+    detail = history.get_run(RunsGetParameters(run_id=first_id))
+    assert detail.result == first_result
+    assert detail.decision_id is not None
+    assert "result_json" not in detail.model_dump()
+    events = history.get_events(
+        RunsEventsParameters(run_id=first_id, after_event_id=0, limit=1)
+    )
+    assert len(events.events) == 1
+    assert events.next_after_event_id == events.events[0].event_id
 
 
 def test_call_usage_is_persisted_and_published(database: Database, tmp_path: Path) -> None:

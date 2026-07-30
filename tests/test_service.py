@@ -286,14 +286,34 @@ async def test_authenticated_schema_is_decodable(app_paths: AppPaths) -> None:
     encoded = json.dumps(response["result"])
     decoded = json.loads(encoded)
     assert decoded["protocol_version"] == 1
-    assert decoded["methods"] == ["diagnostic", "schema"]
+    assert decoded["methods"] == [
+        "diagnostic",
+        "schema",
+        "run.start",
+        "run.cancel",
+        "runs.list",
+        "runs.get",
+        "runs.events",
+        "decision.transition",
+        "decision.resolve",
+    ]
     TypeAdapter(dict[str, object]).validate_python(decoded)
 
 
 @pytest.mark.asyncio
 async def test_contract_has_no_arbitrary_command_path(app_paths: AppPaths) -> None:
     schema = service_contract_schema()
-    assert schema["methods"] == ["diagnostic", "schema"]
+    assert schema["methods"] == [
+        "diagnostic",
+        "schema",
+        "run.start",
+        "run.cancel",
+        "runs.list",
+        "runs.get",
+        "runs.events",
+        "decision.transition",
+        "decision.resolve",
+    ]
     request_schema = schema["request"]
     assert isinstance(request_schema, dict)
     assert request_schema["additionalProperties"] is False
@@ -307,9 +327,24 @@ async def test_contract_has_no_arbitrary_command_path(app_paths: AppPaths) -> No
             request(command="/bin/sh", arguments=["-c", "id"]),
             token=token,
         )
+        nested = await send_message(
+            server,
+            request(
+                method="run.start",
+                params={
+                    "agent_id": "decision",
+                    "question": "Question",
+                    "workspace": "/tmp",
+                    "participant_ids": [],
+                    "command": "/bin/sh",
+                },
+            ),
+            token=token,
+        )
     finally:
         await server.close()
     assert response["code"] == "invalid_request"
+    assert nested["code"] == "invalid_request"
 
 
 def test_service_credential_permissions_and_explicit_rotation(app_paths: AppPaths) -> None:

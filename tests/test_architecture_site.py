@@ -53,6 +53,9 @@ def test_architecture_page_documents_the_external_service_in_english() -> None:
     assert "ego service install" in source
     assert "ego service status" in source
     assert "ego service uninstall" in source
+    assert "run.start" in source
+    assert "runs.events" in source
+    assert "decision.resolve" in source
     assert 'href="external-service.md"' in source
 
     spanish_fragments = (

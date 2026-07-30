@@ -3,22 +3,22 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from ego.agents import build_agent_registry
-from ego.agents.investigate import InvestigationInput
-from ego.decision import DecisionInput
-from ego.deliberation import DeliberationOutcome, NoParticipantsError
+from ego.deliberation import NoParticipantsError
 from ego.events import WorkEvent, WorkEventStream
-from ego.investigation import InvestigationOutcome
 from ego.participants import Participant
 from ego.redaction import redact_sensitive_text
 from ego.storage import Database
-from ego.workspace import resolve_workspace
+from ego.workflow_execution import (
+    WorkflowExecutionOutcome,
+    WorkflowExecutionRequest,
+    WorkflowExecutionRuntime,
+    WorkflowRequestError,
+)
 
 BRIDGE_PROTOCOL_VERSION: Literal[1] = 1
 
@@ -126,146 +126,68 @@ class BridgeRuntime:
         self.event_stream = event_stream
         self.writer = writer
         self.run_id: str | None = None
+        self.execution = WorkflowExecutionRuntime(database, participants, event_stream)
 
     async def execute(self, request: BridgeRequest) -> int:
         self.run_id = None
         try:
-            workspace = resolve_workspace(request.workspace)
-        except (OSError, ValueError) as error:
-            self._error(request.request_id, "invalid_workspace", str(error))
-            return 2
-
-        selected = list(dict.fromkeys(request.participant_ids or self.participants))
-        unknown = sorted(set(selected) - set(self.participants))
-        if unknown:
-            self._error(
-                request.request_id,
-                "unknown_participants",
-                f"Unknown participant(s): {', '.join(unknown)}",
+            prepared = self.execution.prepare(
+                WorkflowExecutionRequest(
+                    agent_id=request.agent_id,
+                    question=request.question,
+                    workspace=request.workspace,
+                    participant_ids=request.participant_ids,
+                    command="ask" if request.agent_id == "decision" else "investigate",
+                )
             )
+        except WorkflowRequestError as error:
+            self._error(request.request_id, error.code, str(error))
             return 2
 
-        workflow_id: Literal["decision", "investigation"] = (
-            "decision" if request.agent_id == "decision" else "investigation"
-        )
         self.writer.emit(
             AcceptedFrame(
                 request_id=request.request_id,
-                agent_id=request.agent_id,
-                workflow_id=workflow_id,
-                workspace=str(workspace),
-                participant_ids=selected,
-            )
-        )
-        registry = build_agent_registry(self.database, self.participants)
-        dispatch = asyncio.create_task(
-            registry.dispatch(
-                request.agent_id,
-                self._agent_input(request, workspace, selected),
+                agent_id=prepared.agent_id,
+                workflow_id=prepared.workflow_id,
+                workspace=str(prepared.workspace),
+                participant_ids=prepared.participant_ids,
             )
         )
         try:
-            outcome = await self._await_with_events(dispatch, request.request_id)
+            outcome = await self.execution.execute(
+                prepared,
+                lambda event: self._emit_event(request.request_id, event),
+            )
         except asyncio.CancelledError:
-            dispatch.cancel()
-            with suppress(asyncio.CancelledError):
-                await dispatch
-            self._drain_events(request.request_id)
             self.writer.emit(CancelledFrame(request_id=request.request_id, run_id=self.run_id))
             return 130
         except NoParticipantsError as error:
-            self._drain_events(request.request_id)
             self._error(request.request_id, "no_participants", str(error), retryable=True)
             return 2
         except Exception as error:
-            self._drain_events(request.request_id)
             self._error(request.request_id, "execution_failed", str(error), retryable=True)
             return 1
 
-        self.writer.emit(self._result_frame(request, outcome))
+        self.writer.emit(self._result_frame(request.request_id, outcome))
         return 0
 
-    async def _await_with_events(
-        self,
-        dispatch: asyncio.Task[Any],
-        request_id: str,
-    ) -> Any:
-        pending_event: asyncio.Task[WorkEvent] | None = None
-        try:
-            while True:
-                self._drain_events(request_id)
-                if dispatch.done():
-                    return await dispatch
-                pending_event = asyncio.create_task(self.event_stream.get())
-                done, _ = await asyncio.wait(
-                    {dispatch, pending_event},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if pending_event in done:
-                    event = pending_event.result()
-                    self._emit_event(request_id, event)
-                    pending_event = None
-                else:
-                    pending_event.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await pending_event
-                    pending_event = None
-        finally:
-            if pending_event is not None and not pending_event.done():
-                pending_event.cancel()
-                with suppress(asyncio.CancelledError):
-                    await pending_event
-
-    def _drain_events(self, request_id: str) -> None:
-        while not self.event_stream.empty():
-            event = self.event_stream.get_nowait()
-            self._emit_event(request_id, event)
-
-    def _emit_event(self, request_id: str, event: WorkEvent) -> None:
+    async def _emit_event(self, request_id: str, event: WorkEvent) -> None:
         self.run_id = event.run_id
         self.writer.emit(EventFrame(request_id=request_id, event=event))
 
     @staticmethod
-    def _agent_input(
-        request: BridgeRequest,
-        workspace: Path,
-        selected: list[str],
-    ) -> DecisionInput | InvestigationInput:
-        if request.agent_id == "decision":
-            return DecisionInput(
-                question=request.question,
-                workspace=workspace,
-                participant_ids=selected,
-                command="ask",
-            )
-        return InvestigationInput(
-            question=request.question,
-            workspace=workspace,
-            participant_ids=selected,
-        )
-
-    @staticmethod
     def _result_frame(
-        request: BridgeRequest,
-        outcome: DeliberationOutcome | InvestigationOutcome,
+        request_id: str,
+        outcome: WorkflowExecutionOutcome,
     ) -> ResultFrame:
-        if isinstance(outcome, DeliberationOutcome):
-            return ResultFrame(
-                request_id=request.request_id,
-                run_id=outcome.final.run_id,
-                agent_id="decision",
-                workflow_id="decision",
-                result_kind="decision",
-                result=outcome.final.model_dump(mode="json"),
-                decision_id=outcome.decision_id,
-            )
         return ResultFrame(
-            request_id=request.request_id,
-            run_id=outcome.report.run_id,
-            agent_id="investigate",
-            workflow_id="investigation",
-            result_kind="investigation_report",
-            result=outcome.report.model_dump(mode="json"),
+            request_id=request_id,
+            run_id=outcome.run_id,
+            agent_id=outcome.agent_id,
+            workflow_id=outcome.workflow_id,
+            result_kind=outcome.result_kind,
+            result=outcome.result.model_dump(mode="json"),
+            decision_id=outcome.decision_id,
         )
 
     def _error(

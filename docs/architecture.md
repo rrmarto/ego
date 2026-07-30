@@ -8,7 +8,11 @@ place and must remain read-only.
 
 - `cli`: one-off commands, TUI launch wiring, and non-interactive rendering.
 - `bridge`: versioned JSON request and JSONL event/result framing for native clients.
-- `service`: authenticated loopback transport and diagnostic dispatch for sandboxed clients.
+- `service`: authenticated loopback transport and typed request/frame dispatch.
+- `workflow_execution`: shared in-process bridge/service workflow execution.
+- `service_runs`: one-active-run ownership, streaming, disconnect, and cancellation policy.
+- `service_history`: bounded public run and event read models.
+- `service_decisions`: typed human Decision transitions and resolutions.
 - `service_launchd`: Ego-owned per-user LaunchAgent installation and health verification.
 - `tui`: full-screen interactive workflow and live event presentation.
 - `shell`: legacy line-oriented interaction kept isolated from the harness.
@@ -69,11 +73,41 @@ Seatbelt boundary. There is no `SMAppService`, XPC service, app-bundled helper,
 or shell command path. The service remains persistent rather than using socket
 activation.
 
-The v1 service exposes only `diagnostic` and `schema`. It cannot dispatch an
-agent, accept a command or argv, read run history, or access a target workspace.
-The diagnostic invokes participant `probe()` methods and the shared Seatbelt
-probe directly. It does not invoke `ego` as a subprocess or create a second
-domain or persistence implementation.
+Service protocol v1 keeps the original `diagnostic` and `schema` contracts and
+adds closed workflow and recovery methods: `run.start`, `run.cancel`,
+`runs.list`, `runs.get`, `runs.events`, `decision.transition`, and
+`decision.resolve`. This is additive; existing diagnostic clients continue to
+work unchanged. There is still no command, argv, shell, provider, SQLite,
+arbitrary context, attachment, or generic dispatch method.
+
+`run.start` requires an explicit `decision` or `investigate` agent, question,
+absolute workspace, and participant identifiers. It dispatches through the
+same `WorkflowExecutionRuntime` used by `ego bridge`, so the service does not
+spawn the bridge or duplicate workflow logic. The connection receives
+`accepted`, committed `event` frames, and exactly one typed `result`, `error`,
+or `cancelled` terminal frame.
+
+Only one workflow may run in an Ego Service process. A concurrent start returns
+the retryable `service_busy` error. The workflow task belongs to Ego rather than
+to the socket: disconnecting detaches the bounded live sink without cancelling
+the run. `run.cancel` is an explicit request on another authenticated
+connection and persists the run as interrupted before the original stream
+terminates as cancelled.
+
+History is global across CLI, TUI, bridge, and service because SQLite remains
+the source of truth. The service exposes bounded summaries, typed run details,
+stable pagination, and incremental committed `WorkEvent` replay. Public models
+exclude raw output paths, raw provider text, credentials, and internal SQLite
+columns.
+
+Human Decision methods reuse the existing append-only transition and resolution
+APIs. A contested result cannot be accepted without selecting one existing
+alternative or recording a custom human conclusion. Accepting a recommendation
+never executes it.
+
+The diagnostic still invokes participant `probe()` methods and the shared
+Seatbelt probe directly. It does not invoke `ego` as a subprocess or create a
+second domain or persistence implementation.
 
 Each connection begins with an HMAC-SHA256 challenge. The client verifies that
 the server possesses Ego's local service credential before returning a proof
@@ -91,10 +125,10 @@ before sending a request.
 
 External applications consume this same public boundary. They connect only to
 the configured IPv4 loopback endpoint, validate the server proof before sending
-a request, and decode the versioned `diagnostic` or `schema` response. They do
-not start Ego, execute participants, open SQLite, or reproduce Ego's domain and
-sandbox rules. The integration contract and operational lifecycle are
-documented in `docs/external-service.md`.
+a request, and decode versioned typed frames. They do not start Ego, invoke
+providers directly, open SQLite, or reproduce Ego's domain and sandbox rules.
+The integration contract and operational lifecycle are documented in
+`docs/external-service.md`.
 
 The shared Seatbelt diagnostic is functional rather than declarative. It first
 confirms that a protected file remains readable, then deliberately attempts a
