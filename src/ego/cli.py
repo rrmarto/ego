@@ -546,14 +546,25 @@ def investigate(
 
 @app.command()
 def plan(
-    decision_ids: Annotated[
-        list[str],
-        typer.Argument(help="One or more accepted Decision Record identifiers."),
-    ],
     participant: Annotated[
         str,
         typer.Option("--participant", "-p", help="Single participant used for planning."),
     ],
+    text: Annotated[
+        str | None,
+        typer.Argument(help="Direct implementation instruction."),
+    ] = None,
+    decision_ids: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--decision",
+            help="Accepted Decision Record identifier; repeat for multiple decisions.",
+        ),
+    ] = None,
+    source_file: Annotated[
+        Path | None,
+        typer.Option("--file", help="UTF-8 instruction file inside the workspace."),
+    ] = None,
     directory: Annotated[Path, typer.Option("--dir", help="Target workspace.")] = Path("."),
     output: Annotated[
         Path | None,
@@ -562,26 +573,36 @@ def plan(
     format: Annotated[PlanFormat, typer.Option()] = PlanFormat.MARKDOWN,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Create a portable implementation plan from accepted decisions."""
+    """Create a portable implementation plan from text, decisions, or a file."""
     _, database, participants = services()
     if participant not in participants:
         raise typer.BadParameter(f"unknown participant: {participant}")
     workspace = resolve_workspace(directory)
     registry = build_agent_registry(database, participants)
-    request = PlanInput(
-        question="Create an implementation plan from the accepted decisions.",
-        workspace=workspace,
-        participant_ids=[participant],
-        command="plan",
-        decision_ids=decision_ids,
-        format=format,
-        destination=str(output) if output is not None else None,
-    )
     try:
+        request = PlanInput(
+            question=(
+                "Create an implementation plan from accepted decisions."
+                if decision_ids
+                else (
+                    f"Create an implementation plan from {source_file}."
+                    if source_file is not None
+                    else "Create an implementation plan from the direct instruction."
+                )
+            ),
+            workspace=workspace,
+            participant_ids=[participant],
+            command="plan",
+            decision_ids=decision_ids or [],
+            brief=text,
+            brief_file=source_file,
+            format=format,
+            destination=str(output) if output is not None else None,
+        )
         outcome = asyncio.run(registry.dispatch("plan", request))
     except KeyError as error:
         raise typer.BadParameter(f"unknown decision: {error.args[0]}") from error
-    except (NoParticipantsError, ValueError) as error:
+    except (NoParticipantsError, ValidationError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     if json_output:
         emit_json(outcome.plan)

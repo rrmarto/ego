@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ego.models import AcceptedDecisionPackage, PlanDraft
+from ego.models import PlanDraft, PlanSource
 
-ARTIFACT_FILES = frozenset({"plan.md", "decisions.json", "manifest.json"})
+ARTIFACT_FILES = frozenset({"plan.md", "sources.json", "manifest.json"})
 
 
 class PlanArtifactError(ValueError):
@@ -36,7 +36,7 @@ class PlanArtifactWriter:
         plan_id: str,
         run_id: str,
         draft: PlanDraft,
-        decisions: list[AcceptedDecisionPackage],
+        sources: list[PlanSource],
         destination: Path | None,
         workspace_git_head: str | None,
     ) -> WrittenPlanArtifact:
@@ -48,29 +48,29 @@ class PlanArtifactWriter:
             raise PlanArtifactError(f"plan destination already exists: {target}")
         try:
             temporary.mkdir(mode=0o700)
-            decisions_path = temporary / "decisions.json"
+            sources_path = temporary / "sources.json"
             plan_path = temporary / "plan.md"
             self._write_text(
-                decisions_path,
+                sources_path,
                 json.dumps(
-                    [item.model_dump(mode="json") for item in decisions],
+                    [item.model_dump(mode="json") for item in sources],
                     ensure_ascii=False,
                     indent=2,
                 )
                 + "\n",
             )
-            self._write_text(plan_path, render_markdown(draft, decisions))
+            self._write_text(plan_path, render_markdown(draft, sources))
             file_hashes = {
                 "plan.md": _sha256(plan_path.read_bytes()),
-                "decisions.json": _sha256(decisions_path.read_bytes()),
+                "sources.json": _sha256(sources_path.read_bytes()),
             }
             manifest = {
-                "artifact_version": 1,
+                "artifact_version": 2,
                 "plan_id": plan_id,
                 "run_id": run_id,
                 "state": "draft",
                 "format": "markdown",
-                "decision_ids": [item.decision_id for item in decisions],
+                "sources": [_source_reference(item) for item in sources],
                 "workspace": str(workspace),
                 "workspace_git_head": workspace_git_head,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -169,7 +169,7 @@ def _sha256(value: bytes) -> str:
 
 def render_markdown(
     draft: PlanDraft,
-    decisions: list[AcceptedDecisionPackage],
+    sources: list[PlanSource],
 ) -> str:
     lines = [
         f"# {draft.title}",
@@ -178,10 +178,16 @@ def render_markdown(
         "",
         draft.objective,
         "",
-        "## Source decisions",
+        "## Sources",
         "",
     ]
-    lines.extend(f"- `{item.decision_id}` — {item.conclusion}" for item in decisions)
+    for item in sources:
+        if item.source_kind == "decision":
+            lines.append(f"- Decision `{item.decision_id}` — {item.conclusion}")
+        elif item.source_kind == "file":
+            lines.append(f"- File `{item.source_path}` — brief `{item.brief_id}`")
+        else:
+            lines.append(f"- Direct instruction — brief `{item.brief_id}`")
     _list_section(lines, "Scope", draft.scope)
     _list_section(lines, "Constraints", draft.constraints)
     _list_section(lines, "Non-goals", draft.non_goals)
@@ -208,3 +214,17 @@ def _list_section(
         return
     lines.extend(("", f"{'#' * level} {heading}", ""))
     lines.extend(f"- {value}" for value in values)
+
+
+def _source_reference(source: PlanSource) -> dict[str, str | None]:
+    if source.source_kind == "decision":
+        return {
+            "source_kind": source.source_kind,
+            "source_id": source.decision_id,
+            "source_path": None,
+        }
+    return {
+        "source_kind": source.source_kind,
+        "source_id": source.brief_id,
+        "source_path": source.source_path,
+    }

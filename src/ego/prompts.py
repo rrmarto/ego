@@ -288,34 +288,39 @@ def _build_plan_prompt(
         if request.tool_policy.read
         else "Use only the supplied context and no tools."
     )
-    decisions: list[dict[str, object]] = []
+    sources: list[dict[str, object]] = []
     if previous_response is None:
-        for item in request.accepted_decisions:
-            evidence = [
-                {
-                    key: evidence_value
-                    for key, evidence_value in evidence_item.model_dump(mode="json").items()
-                    if key not in {"file_sha256", "fragment_sha256", "validation_error"}
-                }
-                for evidence_item in item.evidence
-            ]
-            decisions.append(
-                {
-                    "decision_id": item.decision_id,
-                    "question": item.question,
-                    "conclusion": item.conclusion,
-                    "conclusion_source": item.conclusion_source,
-                    "rationale": item.rationale,
-                    "constraints": item.constraints,
-                    "non_goals": item.non_goals,
-                    "assumptions": item.assumptions,
-                    "risks": item.risks,
-                    "human_note": item.human_note,
-                    "evidence": evidence,
-                }
-            )
-    return f"""You are the planner in Ego. Translate accepted human decisions into one concise,
-implementation-ready plan. Do not reconsider, replace, or expand the accepted conclusions.
+        for item in request.plan_sources:
+            if item.source_kind == "decision":
+                evidence = [
+                    {
+                        key: evidence_value
+                        for key, evidence_value in evidence_item.model_dump(mode="json").items()
+                        if key not in {"file_sha256", "fragment_sha256", "validation_error"}
+                    }
+                    for evidence_item in item.evidence
+                ]
+                sources.append(
+                    {
+                        "source_kind": item.source_kind,
+                        "decision_id": item.decision_id,
+                        "question": item.question,
+                        "conclusion": item.conclusion,
+                        "conclusion_source": item.conclusion_source,
+                        "rationale": item.rationale,
+                        "constraints": item.constraints,
+                        "non_goals": item.non_goals,
+                        "assumptions": item.assumptions,
+                        "risks": item.risks,
+                        "human_note": item.human_note,
+                        "evidence": evidence,
+                    }
+                )
+            else:
+                sources.append(item.model_dump(mode="json", exclude={"created_at"}))
+    return f"""You are the planner in Ego. Translate the supplied accepted decisions or explicit
+human instruction into one concise, implementation-ready plan. Do not reconsider, replace, or
+expand the supplied direction.
 If a material product or architecture choice is missing, record it under open_questions instead of
 deciding it. {tool_instruction}
 Keep tasks minimal, ordered, independently verifiable, and grounded in the current workspace.
@@ -327,8 +332,8 @@ Workflow: {request.workflow_id}
 Stage: {request.phase.value}
 Task: {request.question}
 {correction_text}
-Accepted decisions:
-{json.dumps(decisions, ensure_ascii=False) if decisions else "Omitted on correction."}
+Plan sources:
+{json.dumps(sources, ensure_ascii=False) if sources else "Omitted on correction."}
 
 Return only JSON matching this schema:
 {json.dumps(response_schema(request.phase), ensure_ascii=False)}

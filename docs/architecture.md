@@ -20,7 +20,7 @@ the deterministic export of a requested Plan artifact under `.ego/plans/`.
 - `agents`: specialized-agent contracts, explicit registry, and common runtime.
 - `decision`: compatibility adapter for the existing decision workflow.
 - `investigation`: local-only investigation workflow and report finalization.
-- `planning`: accepted-decision resolution, one-call planning, and bounded artifacts.
+- `planning`: explicit-source resolution, one-call planning, and bounded artifacts.
 - `participants`: provider-specific probing and command construction.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.
@@ -203,10 +203,12 @@ existing full corrective fallback.
 
 ## Planning invariant
 
-Plan accepts only Decision Records already resolved as `accepted` for the same
-canonical workspace. Ego resolves identifiers in SQLite and supplies complete
-`AcceptedDecisionPackage` values to the participant; models never query storage
-or invent source identifiers.
+Plan accepts exactly one source mode: one or more Decision Records already
+resolved as `accepted` for the same canonical workspace, a direct human
+instruction, or a bounded UTF-8 file inside that workspace. CLI source
+selection is explicit: positional text, repeatable `--decision`, or `--file`.
+Ego resolves Decision identifiers in SQLite and snapshots every source before
+the participant runs; models never query storage or invent source identifiers.
 
 Planning is intentionally one stage and one explicitly selected participant.
 The prompt contains only accepted conclusions and compact material context, and
@@ -215,7 +217,7 @@ review or synthesis. One corrective call is reserved for invalid structured
 output and reuses the prior response with tools disabled.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
-deterministic writer renders `plan.md`, `decisions.json`, and `manifest.json`
+deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`
 atomically below `.ego/plans/<slug>-<id>/`. It rejects absolute destinations,
 traversal, symlinks, existing targets, and unexpected files. Plans start as
 `draft`; approval, rejection, and supersession are append-only human actions.

@@ -258,6 +258,7 @@ class InvestigationReport(BaseModel):
 class AcceptedDecisionPackage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    source_kind: Literal["decision"] = "decision"
     decision_id: str
     question: str
     workspace: Path
@@ -273,6 +274,19 @@ class AcceptedDecisionPackage(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     human_note: str | None = None
     accepted_at: str
+
+
+class HumanPlanBrief(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_kind: Literal["text", "file"]
+    brief_id: str
+    instruction: str
+    source_path: str | None = None
+    created_at: str
+
+
+PlanSource = AcceptedDecisionPackage | HumanPlanBrief
 
 
 class PlanTask(BaseModel):
@@ -317,6 +331,7 @@ class ImplementationPlan(BaseModel):
     format: PlanFormat
     workspace: Path
     decision_ids: list[str]
+    sources: list[PlanSource] = Field(default_factory=list)
     artifact_path: Path
     workspace_git_head: str | None = None
     manifest_sha256: str
@@ -342,7 +357,7 @@ class TurnRequest(BaseModel):
     peer_investigations: dict[str, InvestigationDraft] = Field(default_factory=dict)
     investigation_reviews: dict[str, list[InvestigationReview]] = Field(default_factory=dict)
     investigation_syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
-    accepted_decisions: list[AcceptedDecisionPackage] = Field(default_factory=list)
+    plan_sources: list[PlanSource] = Field(default_factory=list)
 
 
 class UsageMetrics(BaseModel):

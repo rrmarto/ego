@@ -4,18 +4,23 @@ import asyncio
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ego.agents.base import AgentInput
 from ego.agents.runtime import AgentRuntime, NoParticipantsError
 from ego.events import WorkEventType
 from ego.models import (
+    AcceptedDecisionPackage,
+    HumanPlanBrief,
     ImplementationPlan,
     PlanDraft,
     PlanFormat,
     PlanPhase,
+    PlanSource,
     PlanState,
     RunStatus,
     ToolPolicy,
@@ -26,11 +31,38 @@ from ego.planning.artifacts import PlanArtifactWriter
 from ego.storage import Database
 from ego.workspace import observe_git
 
+MAX_PLAN_BRIEF_CHARS = 12_000
+MAX_PLAN_BRIEF_BYTES = 48_000
+
 
 class PlanInput(AgentInput):
-    decision_ids: list[str] = Field(min_length=1)
+    decision_ids: list[str] = Field(default_factory=list)
+    brief: str | None = None
+    brief_file: Path | None = None
     format: PlanFormat = PlanFormat.MARKDOWN
     destination: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> PlanInput:
+        source_count = sum(
+            (
+                bool(self.decision_ids),
+                self.brief is not None,
+                self.brief_file is not None,
+            )
+        )
+        if source_count != 1:
+            raise ValueError("Plan requires exactly one source: text, --decision, or --file")
+        if self.brief is not None:
+            instruction = self.brief.strip()
+            if not instruction:
+                raise ValueError("plan text cannot be empty")
+            if len(instruction) > MAX_PLAN_BRIEF_CHARS:
+                raise ValueError(
+                    f"plan text exceeds the {MAX_PLAN_BRIEF_CHARS}-character limit"
+                )
+            self.brief = instruction
+        return self
 
 
 @dataclass(frozen=True)
@@ -56,14 +88,11 @@ class PlanWorkflow:
             raise ValueError(f"unsupported plan format: {request.format.value}")
         if len(request.participant_ids) != 1:
             raise ValueError("Plan requires exactly one explicitly selected participant")
-        decision_ids = list(dict.fromkeys(request.decision_ids))
+        sources = self._resolve_sources(request)
         decisions = [
-            self.database.get_accepted_decision_package(
-                decision_id,
-                workspace=request.workspace,
-            )
-            for decision_id in decision_ids
+            source for source in sources if isinstance(source, AcceptedDecisionPackage)
         ]
+        decision_ids = [source.decision_id for source in decisions]
         git_start = await observe_git(request.workspace)
         run_id = self.database.create_run(
             command=request.command,
@@ -95,7 +124,7 @@ class PlanWorkflow:
                             agent_id="plan",
                             workflow_id=self.workflow_id,
                             tool_policy=ToolPolicy.local_read_only(),
-                            accepted_decisions=decisions,
+                            plan_sources=sources,
                         ),
                     )
                 },
@@ -123,7 +152,7 @@ class PlanWorkflow:
                 plan_id=plan_id,
                 run_id=run_id,
                 draft=draft,
-                decisions=decisions,
+                sources=sources,
                 destination=None if request.destination is None else Path(request.destination),
                 workspace_git_head=git_start.head,
             )
@@ -140,6 +169,7 @@ class PlanWorkflow:
                 format=request.format,
                 workspace=request.workspace,
                 decision_ids=decision_ids,
+                sources=sources,
                 artifact_path=artifact.path.relative_to(request.workspace),
                 workspace_git_head=git_start.head,
                 manifest_sha256=artifact.manifest_sha256,
@@ -167,6 +197,68 @@ class PlanWorkflow:
         except BaseException:
             self.database.set_run_status(run_id, RunStatus.FAILED)
             raise
+
+    def _resolve_sources(self, request: PlanInput) -> list[PlanSource]:
+        if request.decision_ids:
+            decision_ids = list(dict.fromkeys(request.decision_ids))
+            return [
+                self.database.get_accepted_decision_package(
+                    decision_id,
+                    workspace=request.workspace,
+                )
+                for decision_id in decision_ids
+            ]
+        if request.brief is not None:
+            return [self._human_brief(request.brief, source_kind="text")]
+        if request.brief_file is None:
+            raise ValueError("Plan source is missing")
+        workspace = request.workspace.resolve()
+        candidate = request.brief_file
+        if not candidate.is_absolute():
+            candidate = workspace / candidate
+        try:
+            source_path = candidate.resolve(strict=True)
+            relative_path = source_path.relative_to(workspace)
+        except (FileNotFoundError, ValueError) as error:
+            raise ValueError("plan source file must exist inside the workspace") from error
+        if not source_path.is_file():
+            raise ValueError("plan source file must be a regular file")
+        if source_path.stat().st_size > MAX_PLAN_BRIEF_BYTES:
+            raise ValueError(
+                f"plan source file exceeds the {MAX_PLAN_BRIEF_BYTES}-byte limit"
+            )
+        try:
+            instruction = source_path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError as error:
+            raise ValueError("plan source file must be UTF-8 text") from error
+        if not instruction:
+            raise ValueError("plan source file cannot be empty")
+        if len(instruction) > MAX_PLAN_BRIEF_CHARS:
+            raise ValueError(
+                f"plan source file exceeds the {MAX_PLAN_BRIEF_CHARS}-character limit"
+            )
+        return [
+            self._human_brief(
+                instruction,
+                source_kind="file",
+                source_path=str(relative_path),
+            )
+        ]
+
+    @staticmethod
+    def _human_brief(
+        instruction: str,
+        *,
+        source_kind: Literal["text", "file"],
+        source_path: str | None = None,
+    ) -> HumanPlanBrief:
+        return HumanPlanBrief(
+            source_kind=source_kind,
+            brief_id=str(uuid.uuid4()),
+            instruction=instruction,
+            source_path=source_path,
+            created_at=datetime.now(UTC).isoformat(),
+        )
 
 
 def _unique(values: Iterable[str]) -> list[str]:
