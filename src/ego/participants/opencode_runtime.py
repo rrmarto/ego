@@ -8,7 +8,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from ego.models import InvestigationPhase, Phase, TurnRequest
+from ego.models import InvestigationPhase, Phase, PlanPhase, TurnRequest
 
 _SAFE_CONFIG_KEYS = frozenset(
     {
@@ -179,12 +179,12 @@ def _permissions(request: TurnRequest | None) -> dict[str, object]:
         Phase.INDEPENDENT,
         Phase.PEER_REVIEW,
     }
-    investigation_read = (
+    read_only_workflow = (
         request is not None
-        and isinstance(request.phase, InvestigationPhase)
+        and isinstance(request.phase, (InvestigationPhase, PlanPhase))
         and request.tool_policy.read
     )
-    if not decision_read and not investigation_read:
+    if not decision_read and not read_only_workflow:
         return permissions
     assert request is not None
     workspace = str(Path(request.workspace).resolve())

@@ -18,6 +18,7 @@ from ego.models import (
     InvestigationSynthesis,
     ParticipantAvailability,
     Phase,
+    PlanPhase,
     Position,
     ProcessResult,
     Synthesis,
@@ -214,6 +215,45 @@ def test_opencode_command_uses_default_model_in_an_isolated_runtime(
     assert "--model" not in command
     assert participant.requires_external_sandbox
     assert participant.resolved_model == "custom/default-model"
+
+    participant.cleanup_command(command)
+    assert not runtime_home.exists()
+
+
+def test_opencode_plan_tools_are_local_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    participant = OpenCodeParticipant(ParticipantConfig(), EgoConfig())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = TurnRequest(
+        run_id="run",
+        phase=PlanPhase.DRAFT,
+        question="Create the plan.",
+        workspace=workspace,
+        agent_id="plan",
+        workflow_id="plan",
+        tool_policy=ToolPolicy.local_read_only(),
+    )
+
+    command = participant.command("/usr/local/bin/opencode", {}, request)
+    runtime_home = Path(command[1].removeprefix("HOME="))
+    runtime_config_home = Path(command[2].removeprefix("XDG_CONFIG_HOME="))
+    runtime_config = json.loads(
+        (runtime_config_home / "opencode" / "opencode.json").read_text(encoding="utf-8")
+    )
+    permissions = runtime_config["permission"]
+
+    assert permissions["read"] == "allow"
+    assert permissions["glob"] == "allow"
+    assert permissions["grep"] == "allow"
+    assert permissions["external_directory"][str(workspace.resolve()) + "/**"] == "allow"
+    assert permissions["edit"] == "deny"
+    assert permissions["bash"] == "deny"
+    assert permissions["websearch"] == "deny"
+    assert permissions["task"] == "deny"
 
     participant.cleanup_command(command)
     assert not runtime_home.exists()
