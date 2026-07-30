@@ -89,6 +89,18 @@ an already authenticated client. Roma Desk stores its client copy in Keychain
 through an explicit user-controlled setup and validates the server challenge
 before sending a request.
 
+External applications consume this same public boundary. They connect only to
+the configured IPv4 loopback endpoint, validate the server proof before sending
+a request, and decode the versioned `diagnostic` or `schema` response. They do
+not start Ego, execute participants, open SQLite, or reproduce Ego's domain and
+sandbox rules. The integration contract and operational lifecycle are
+documented in `docs/external-service.md`.
+
+The shared Seatbelt diagnostic is functional rather than declarative. It first
+confirms that a protected file remains readable, then deliberately attempts a
+write that must fail. A raw `Operation not permitted` detail is therefore
+positive evidence when the structured `safe` field is true.
+
 ## Specialized agents and workflows
 
 `SpecializedAgent` declares an identifier, description, input and output

@@ -20,18 +20,27 @@ for (const button of lensButtons) {
 const navToggle = document.querySelector(".nav-toggle");
 const siteNav = document.querySelector("#site-nav");
 
+function setNavigationOpen(open) {
+  navToggle?.setAttribute("aria-expanded", String(open));
+  siteNav?.classList.toggle("is-open", open);
+}
+
 navToggle?.addEventListener("click", () => {
   const open = navToggle.getAttribute("aria-expanded") !== "true";
-  navToggle.setAttribute("aria-expanded", String(open));
-  siteNav?.classList.toggle("is-open", open);
+  setNavigationOpen(open);
 });
 
 for (const link of document.querySelectorAll("#site-nav a")) {
   link.addEventListener("click", () => {
-    navToggle?.setAttribute("aria-expanded", "false");
-    siteNav?.classList.remove("is-open");
+    setNavigationOpen(false);
   });
 }
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || navToggle?.getAttribute("aria-expanded") !== "true") return;
+  setNavigationOpen(false);
+  navToggle.focus();
+});
 
 const observedSections = [...document.querySelectorAll("main section[id]")];
 const navLinks = [...document.querySelectorAll("#site-nav a")];
@@ -42,7 +51,13 @@ const sectionObserver = new IntersectionObserver(
       .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
     if (!visible) return;
     for (const link of navLinks) {
-      link.classList.toggle("is-active", link.hash === `#${visible.target.id}`);
+      const active = link.hash === `#${visible.target.id}`;
+      link.classList.toggle("is-active", active);
+      if (active) {
+        link.setAttribute("aria-current", "location");
+      } else {
+        link.removeAttribute("aria-current");
+      }
     }
   },
   { rootMargin: "-20% 0px -65%", threshold: [0.05, 0.25, 0.5] },

@@ -40,3 +40,30 @@ def test_architecture_page_is_self_contained_and_tracks_protocol_phases() -> Non
 
     for phase_label in PHASE_LABELS.values():
         assert phase_label in source
+
+
+def test_architecture_page_documents_the_external_service_in_english() -> None:
+    repository = Path(__file__).parents[1]
+    source = (repository / "docs" / "index.html").read_text(encoding="utf-8")
+
+    assert '<html lang="en">' in source
+    assert 'id="service"' in source
+    assert "com.rrmarto.ego.service" in source
+    assert "127.0.0.1:37645" in source
+    assert "ego service install" in source
+    assert "ego service status" in source
+    assert "ego service uninstall" in source
+    assert 'href="external-service.md"' in source
+
+    spanish_fragments = (
+        "arquitectura",
+        "decisión",
+        "investigación",
+        "participantes",
+        "seguridad",
+        "servicio local",
+        "solo lectura",
+    )
+    lowered_source = source.casefold()
+    for fragment in spanish_fragments:
+        assert fragment not in lowered_source

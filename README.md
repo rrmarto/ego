@@ -255,6 +255,12 @@ server:
 ego service schema
 ```
 
+External application authors should use the complete
+[Ego Service integration guide](docs/external-service.md). It documents
+LaunchAgent ownership, lifecycle states, the HMAC handshake, diagnostic
+semantics, client responsibilities, logs, and stable versus editable
+installations.
+
 ## Deliberation protocol
 
 Every available participant receives the same question and follows the same
