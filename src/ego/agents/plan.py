@@ -7,8 +7,8 @@ from ego.planning import PlanInput, PlanOutcome, PlanWorkflow
 class PlanAgent(SpecializedAgent[PlanInput, PlanOutcome]):
     agent_id = "plan"
     description = (
-        "Translates accepted decisions or explicit human instructions into one bounded "
-        "implementation-plan artifact."
+        "Builds and audits a collaborative implementation plan from accepted decisions "
+        "or explicit human instructions."
     )
     workflow_id = "plan"
     input_contract = PlanInput

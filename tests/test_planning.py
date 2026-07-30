@@ -8,9 +8,19 @@ import pytest
 from ego.models import (
     AvailabilityStatus,
     Confidence,
+    CritiqueDisposition,
+    CritiqueDispositionAction,
     FinalDecision,
+    FinalPlanAssembly,
+    JointPlanDraft,
     ParticipantAvailability,
     ParticipantTurnResult,
+    PlanAudit,
+    PlanCoverage,
+    PlanCoverageDisposition,
+    PlanCritique,
+    PlanCritiqueCategory,
+    PlanCritiqueSeverity,
     PlanDraft,
     PlanPhase,
     PlanState,
@@ -20,14 +30,19 @@ from ego.models import (
     TurnRequest,
 )
 from ego.planning import PlanArtifactError, PlanArtifactWriter, PlanInput, PlanWorkflow
+from ego.planning.assembly import (
+    blocking_issues,
+    normalize_final_assembly,
+    normalize_joint_draft,
+)
 from ego.prompts import build_prompt
 from ego.storage import Database
 
 
 class PlanParticipant:
-    participant_id = "codex"
-
-    def __init__(self) -> None:
+    def __init__(self, participant_id: str, *, raises_critique: bool = False) -> None:
+        self.participant_id = participant_id
+        self.raises_critique = raises_critique
         self.requests: list[TurnRequest] = []
 
     async def probe(self) -> ParticipantAvailability:
@@ -40,11 +55,82 @@ class PlanParticipant:
 
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
         self.requests.append(request)
-        assert request.phase is PlanPhase.DRAFT
-        assert request.tool_policy.read
-        assert not request.tool_policy.write
-        assert request.plan_sources
-        draft = PlanDraft(
+        if request.phase is PlanPhase.INDEPENDENT:
+            assert request.tool_policy.read
+            assert request.plan_sources
+            payload: PlanDraft | JointPlanDraft | PlanAudit | FinalPlanAssembly = (
+                self._draft(f"Independent contribution from {self.participant_id}.")
+            )
+        elif request.phase is PlanPhase.JOINT_DRAFT:
+            assert not request.tool_policy.read
+            source_task_ids = [
+                f"{participant_id}:{task.id}"
+                for participant_id, draft in request.plan_candidates.items()
+                for task in draft.tasks
+            ]
+            payload = JointPlanDraft(
+                draft=self._draft("Reconcile every independent contribution."),
+                coverage=[
+                    PlanCoverage(
+                        source_task_id=source_task_id,
+                        disposition=PlanCoverageDisposition.MERGED,
+                        target_task_ids=["T1"],
+                        rationale="The joint task preserves this contribution.",
+                    )
+                    for source_task_id in source_task_ids
+                ],
+            )
+        elif request.phase is PlanPhase.AUTHOR_AUDIT:
+            assert request.own_plan is not None
+            assert request.joint_plan is not None
+            payload = PlanAudit(
+                criticisms=(
+                    [
+                        PlanCritique(
+                            id="C1",
+                            severity=PlanCritiqueSeverity.MATERIAL,
+                            category=PlanCritiqueCategory.OMISSION,
+                            description="The candidate lost a required validation.",
+                            required_change="Add the missing validation to T1.",
+                            source_task_ids=["T1"],
+                            candidate_task_ids=["T1"],
+                        )
+                    ]
+                    if self.raises_critique
+                    else []
+                )
+            )
+        else:
+            assert request.phase is PlanPhase.FINAL_ASSEMBLY
+            assert request.joint_plan is not None
+            critique_ids = [
+                item.id
+                for audit in request.plan_audits.values()
+                for item in audit.criticisms
+            ]
+            payload = FinalPlanAssembly(
+                draft=request.joint_plan.draft,
+                critique_dispositions=[
+                    CritiqueDisposition(
+                        critique_id=critique_id,
+                        action=CritiqueDispositionAction.APPLIED,
+                        target_task_ids=["T1"],
+                        rationale="The final task now preserves the criticism.",
+                    )
+                    for critique_id in critique_ids
+                ],
+            )
+        return ParticipantTurnResult(
+            participant_id=self.participant_id,
+            phase=request.phase,
+            payload=payload,
+            raw_output=payload.model_dump_json(),
+            duration_seconds=0.01,
+        )
+
+    @staticmethod
+    def _draft(description: str) -> PlanDraft:
+        return PlanDraft(
             title="Add bounded plan artifacts",
             objective="Create one portable Markdown implementation plan.",
             scope=["Add the Plan specialized agent."],
@@ -55,20 +141,26 @@ class PlanParticipant:
                 PlanTask(
                     id="T1",
                     title="Create the writer",
-                    description="Render and validate the portable artifact.",
+                    description=description,
                     affected_paths=["src/ego/planning/artifacts.py"],
                     acceptance_criteria=["Traversal outside .ego/plans is rejected."],
                 )
             ],
             validation=["Run the focused planning tests."],
         )
-        return ParticipantTurnResult(
-            participant_id=self.participant_id,
-            phase=request.phase,
-            payload=draft,
-            raw_output=draft.model_dump_json(),
-            duration_seconds=0.01,
+
+
+def plan_participants(
+    *participant_ids: str,
+    critic: str | None = None,
+) -> dict[str, PlanParticipant]:
+    return {
+        participant_id: PlanParticipant(
+            participant_id,
+            raises_critique=participant_id == critic,
         )
+        for participant_id in participant_ids
+    }
 
 
 def accepted_decision(database: Database, workspace: Path) -> str:
@@ -94,27 +186,31 @@ def accepted_decision(database: Database, workspace: Path) -> str:
 
 
 @pytest.mark.asyncio
-async def test_plan_uses_one_call_and_exports_a_portable_markdown_artifact(
+async def test_plan_collaborates_without_final_assembly_when_audits_are_clear(
     database: Database,
     tmp_path: Path,
 ) -> None:
     decision_id = accepted_decision(database, tmp_path)
-    participant = PlanParticipant()
-    workflow = PlanWorkflow(database, {participant.participant_id: participant})
+    participants = plan_participants("codex", "claude", "opencode")
+    workflow = PlanWorkflow(database, participants)
 
     outcome = await workflow.plan(
         PlanInput(
             question="Create an implementation plan from the accepted decision.",
             workspace=tmp_path,
-            participant_ids=["codex"],
+            participant_ids=list(participants),
             command="plan",
             decision_ids=[decision_id],
             destination=".ego/plans/portable-plan",
         )
     )
 
-    assert len(participant.requests) == 1
+    assert sum(len(item.requests) for item in participants.values()) == 7
     assert outcome.plan.state is PlanState.DRAFT
+    assert set(outcome.plan.participant_plans) == set(participants)
+    assert set(outcome.plan.audits) == set(participants)
+    assert outcome.plan.final_assembly is None
+    assert outcome.plan.blocking_issues == []
     artifact = tmp_path / outcome.plan.artifact_path
     assert {item.name for item in artifact.iterdir()} == {
         "plan.md",
@@ -124,10 +220,52 @@ async def test_plan_uses_one_call_and_exports_a_portable_markdown_artifact(
     assert decision_id in (artifact / "plan.md").read_text(encoding="utf-8")
     sources = json.loads((artifact / "sources.json").read_text(encoding="utf-8"))
     assert sources[0]["conclusion"] == "Create bounded Markdown plan artifacts."
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["artifact_version"] == 3
+    assert manifest["participants"] == sorted(participants)
+    assert manifest["blocking_issues"] == []
     assert database.get_plan(outcome.plan.plan_id)["state"] == "draft"
     calls = database.get_run(outcome.plan.run_id)["calls"]
-    assert len(calls) == 1
-    assert calls[0]["phase"] == PlanPhase.DRAFT.value
+    assert len(calls) == 7
+    assert [item["phase"] for item in calls].count(PlanPhase.INDEPENDENT.value) == 3
+    assert [item["phase"] for item in calls].count(PlanPhase.JOINT_DRAFT.value) == 1
+    assert [item["phase"] for item in calls].count(PlanPhase.AUTHOR_AUDIT.value) == 3
+
+
+@pytest.mark.asyncio
+async def test_material_author_critique_triggers_a_different_final_assembler(
+    database: Database,
+    tmp_path: Path,
+) -> None:
+    participants = plan_participants("codex", "claude", "opencode", critic="claude")
+
+    outcome = await PlanWorkflow(database, participants).plan(
+        PlanInput(
+            question="Create a collaborative implementation plan.",
+            workspace=tmp_path,
+            participant_ids=list(participants),
+            command="plan",
+            brief="Add a bounded collaborative planning workflow.",
+        )
+    )
+
+    joint_authors = [
+        participant_id
+        for participant_id, participant in participants.items()
+        if any(request.phase is PlanPhase.JOINT_DRAFT for request in participant.requests)
+    ]
+    final_authors = [
+        participant_id
+        for participant_id, participant in participants.items()
+        if any(request.phase is PlanPhase.FINAL_ASSEMBLY for request in participant.requests)
+    ]
+    assert len(joint_authors) == 1
+    assert len(final_authors) == 1
+    assert joint_authors != final_authors
+    assert sum(len(item.requests) for item in participants.values()) == 8
+    assert outcome.plan.final_assembly is not None
+    assert outcome.plan.final_assembly.critique_dispositions[0].critique_id == "claude:C1"
+    assert outcome.plan.blocking_issues == []
 
 
 @pytest.mark.asyncio
@@ -135,20 +273,20 @@ async def test_plan_accepts_direct_text_without_a_decision(
     database: Database,
     tmp_path: Path,
 ) -> None:
-    participant = PlanParticipant()
+    participants = plan_participants("codex", "claude")
     instruction = "Add a CSV export while preserving the current JSON export."
 
-    outcome = await PlanWorkflow(database, {"codex": participant}).plan(
+    outcome = await PlanWorkflow(database, participants).plan(
         PlanInput(
             question="Create a plan from the direct instruction.",
             workspace=tmp_path,
-            participant_ids=["codex"],
+            participant_ids=[],
             command="plan",
             brief=instruction,
         )
     )
 
-    assert len(participant.requests) == 1
+    assert sum(len(item.requests) for item in participants.values()) == 5
     assert outcome.plan.decision_ids == []
     assert outcome.plan.sources[0].source_kind == "text"
     artifact = tmp_path / outcome.plan.artifact_path
@@ -165,13 +303,13 @@ async def test_plan_accepts_a_bounded_workspace_file(
     source_file = tmp_path / "docs" / "export.md"
     source_file.parent.mkdir()
     source_file.write_text("Add a CSV export.\n", encoding="utf-8")
-    participant = PlanParticipant()
+    participants = plan_participants("codex", "claude")
 
-    outcome = await PlanWorkflow(database, {"codex": participant}).plan(
+    outcome = await PlanWorkflow(database, participants).plan(
         PlanInput(
             question="Create a plan from docs/export.md.",
             workspace=tmp_path,
-            participant_ids=["codex"],
+            participant_ids=list(participants),
             command="plan",
             brief_file=Path("docs/export.md"),
         )
@@ -192,20 +330,20 @@ async def test_plan_rejects_a_file_outside_the_workspace_before_provider_use(
     workspace.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text("Do something.", encoding="utf-8")
-    participant = PlanParticipant()
+    participants = plan_participants("codex", "claude")
 
     with pytest.raises(ValueError, match="inside the workspace"):
-        await PlanWorkflow(database, {"codex": participant}).plan(
+        await PlanWorkflow(database, participants).plan(
             PlanInput(
                 question="Create a plan from a file.",
                 workspace=workspace,
-                participant_ids=["codex"],
+                participant_ids=list(participants),
                 command="plan",
                 brief_file=outside,
             )
         )
 
-    assert participant.requests == []
+    assert all(not item.requests for item in participants.values())
 
 
 def test_plan_requires_exactly_one_source(tmp_path: Path) -> None:
@@ -220,6 +358,39 @@ def test_plan_requires_exactly_one_source(tmp_path: Path) -> None:
         PlanInput(**common)
     with pytest.raises(ValueError, match="exactly one source"):
         PlanInput(**common, brief="Plan it.", decision_ids=["decision-1"])
+
+
+def test_missing_collaboration_mappings_become_blocking_variants() -> None:
+    candidates = {
+        "codex": PlanParticipant._draft("Codex contribution."),
+        "claude": PlanParticipant._draft("Claude contribution."),
+    }
+    joint, _ = normalize_joint_draft(
+        JointPlanDraft(draft=PlanParticipant._draft("Joint candidate.")),
+        candidates,
+    )
+    audit = PlanAudit(
+        criticisms=[
+            PlanCritique(
+                id="claude:C1",
+                severity=PlanCritiqueSeverity.MATERIAL,
+                category=PlanCritiqueCategory.OMISSION,
+                description="A material task was omitted.",
+                required_change="Restore the task.",
+                source_task_ids=["claude:T1"],
+            )
+        ]
+    )
+    assembly, _ = normalize_final_assembly(
+        FinalPlanAssembly(draft=joint.draft),
+        {"claude": audit},
+    )
+
+    assert assembly is not None
+    assert assembly.critique_dispositions[0].action is CritiqueDispositionAction.VARIANT
+    issues = blocking_issues(joint, {"claude": audit}, assembly, [], [])
+    assert any("codex:T1 remains unmapped" in issue for issue in issues)
+    assert any("claude:C1 remains a variant" in issue for issue in issues)
 
 
 def test_direct_source_is_not_repeated_in_the_prompt(tmp_path: Path) -> None:
@@ -307,35 +478,35 @@ async def test_plan_rejects_unaccepted_decisions_before_calling_a_participant(
             confidence_reason="The decision has not been accepted.",
         )
     )
-    participant = PlanParticipant()
+    participants = plan_participants("codex", "claude")
 
     with pytest.raises(ValueError, match="is not accepted"):
-        await PlanWorkflow(database, {"codex": participant}).plan(
+        await PlanWorkflow(database, participants).plan(
             PlanInput(
                 question="Plan it.",
                 workspace=tmp_path,
-                participant_ids=["codex"],
+                participant_ids=list(participants),
                 command="plan",
                 decision_ids=[decision_id],
             )
         )
 
-    assert participant.requests == []
+    assert all(not item.requests for item in participants.values())
 
 
 @pytest.mark.asyncio
-async def test_plan_requires_exactly_one_explicit_participant(
+async def test_plan_requires_at_least_two_selected_participants(
     database: Database,
     tmp_path: Path,
 ) -> None:
     decision_id = accepted_decision(database, tmp_path)
 
-    with pytest.raises(ValueError, match="exactly one"):
-        await PlanWorkflow(database, {}).plan(
+    with pytest.raises(ValueError, match="at least two"):
+        await PlanWorkflow(database, {"codex": PlanParticipant("codex")}).plan(
             PlanInput(
                 question="Plan it.",
                 workspace=tmp_path,
-                participant_ids=[],
+                participant_ids=["codex"],
                 command="plan",
                 decision_ids=[decision_id],
             )
@@ -444,3 +615,51 @@ def test_plan_approval_updates_the_portable_manifest_and_append_only_state(
     assert stored["state"] == "approved"
     assert [item["state"] for item in stored["events"]] == ["draft", "approved"]
     assert manifest["state"] == "approved"
+
+
+def test_plan_with_blocking_issues_cannot_be_approved(
+    database: Database,
+    tmp_path: Path,
+) -> None:
+    from ego.models import ImplementationPlan, PlanFormat
+
+    run_id = database.create_run(command="plan", question="Plan it.", workspace=tmp_path)
+    draft = PlanDraft(
+        title="Blocked plan",
+        objective="Preserve a material unresolved author criticism.",
+        tasks=[PlanTask(id="T1", title="Wait", description="Resolve the criticism.")],
+    )
+    artifact = PlanArtifactWriter().write(
+        workspace=tmp_path,
+        plan_id="blocked-plan",
+        run_id=run_id,
+        draft=draft,
+        sources=[],
+        destination=Path(".ego/plans/blocked"),
+        workspace_git_head=None,
+        blocking_issues=["Material critique claude:C1 was not assembled."],
+    )
+    plan = ImplementationPlan(
+        plan_id="blocked-plan",
+        run_id=run_id,
+        state=PlanState.DRAFT,
+        format=PlanFormat.MARKDOWN,
+        workspace=tmp_path,
+        decision_ids=[],
+        artifact_path=artifact.path.relative_to(tmp_path),
+        manifest_sha256=artifact.manifest_sha256,
+        plan_sha256=artifact.plan_sha256,
+        draft=draft,
+        blocking_issues=["Material critique claude:C1 was not assembled."],
+    )
+    database.create_plan(plan)
+
+    with pytest.raises(ValueError, match="unresolved blocking issues"):
+        database.transition_plan(
+            plan.plan_id,
+            PlanState.APPROVED,
+            "Approve anyway.",
+            manifest_sha256=artifact.manifest_sha256,
+        )
+
+    assert database.get_plan(plan.plan_id)["state"] == PlanState.DRAFT.value

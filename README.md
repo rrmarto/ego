@@ -22,7 +22,7 @@ Ego v0.1.0:
 - runs a five-phase deliberation protocol instead of selecting a result by vote;
 - validates cited paths, line ranges, and file fragments against the workspace;
 - persists runs, normalized model responses, decisions, plans, and human resolutions;
-- creates one-call Markdown implementation plans from explicit sources under
+- creates collaboratively audited Markdown implementation plans from explicit sources under
   the bounded `.ego/plans/` artifact path;
 - reports provider usage when a CLI exposes token or cost information;
 - exposes authenticated diagnostics, workflow streams, recovery, and human Decision
@@ -131,9 +131,11 @@ ego investigate "Why does OpenCode fail?" --dir . \
 ego investigate "Why does OpenCode fail?" --dir . --json
 
 # Create a portable Markdown plan from direct text, decisions, or a workspace file
-ego plan "Add CSV export" --participant codex --dir .
-ego plan --decision <decision-id> --participant codex --dir .
-ego plan --file docs/export-plan.md --participant codex --dir .
+ego plan "Add CSV export" --dir .
+ego plan --decision <decision-id> --dir .
+ego plan --file docs/export-plan.md --dir .
+# Optional restriction; Plan still requires at least two available participants
+ego plan "Add CSV export" -p codex -p claude --dir .
 ego plans
 ego plans approve <plan-id>
 
@@ -336,24 +338,27 @@ Plan can translate direct instructions, a workspace file, or accepted Decision
 Records without repeating the five-stage deliberation:
 
 ```bash
-ego plan "Add CSV export" --participant codex --dir .
-ego plan --decision <decision-id> --participant codex --dir .
-ego plan --file docs/export-plan.md --participant codex --dir .
+ego plan "Add CSV export" --dir .
+ego plan --decision <decision-id> --dir .
+ego plan --file docs/export-plan.md --dir .
 ego plans approve <plan-id>
 ```
 
-Plan resolves and snapshots the explicit source, makes one normal provider
-call, and writes `plan.md`, `sources.json`, and `manifest.json` below
+Plan resolves and snapshots the explicit source, creates independent plans,
+builds a rotating joint candidate, and lets every original author audit it.
+Final assembly runs only when criticism exists. Ego writes `plan.md`,
+`sources.json`, and `manifest.json` below
 `.ego/plans/`. The participant remains read-only; a deterministic writer owns
 that narrow artifact path. Approval records readiness for an external Builder
-but never implements the plan.
+but never implements the plan. Unmapped contributions, missing audits,
+unapplied material criticism, and variants block approval.
 
 ## Architecture
 
 The TUI and command-line interface depend on the same application services.
 `DecisionAgent`, `InvestigateAgent`, and `PlanAgent` select reproducible
 workflows through an explicit registry and share an `AgentRuntime`. Plan uses
-one explicitly selected participant to bound token use. The runtime works
+bounded parallel stages and at least two participants. The runtime works
 through the `Participant` contract, so provider flags,
 authentication checks, and output parsing remain inside their adapters.
 

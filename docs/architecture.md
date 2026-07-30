@@ -20,7 +20,7 @@ the deterministic export of a requested Plan artifact under `.ego/plans/`.
 - `agents`: specialized-agent contracts, explicit registry, and common runtime.
 - `decision`: compatibility adapter for the existing decision workflow.
 - `investigation`: local-only investigation workflow and report finalization.
-- `planning`: explicit-source resolution, one-call planning, and bounded artifacts.
+- `planning`: explicit-source resolution, collaborative planning, and bounded artifacts.
 - `participants`: provider-specific probing and command construction.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.
@@ -210,18 +210,37 @@ selection is explicit: positional text, repeatable `--decision`, or `--file`.
 Ego resolves Decision identifiers in SQLite and snapshots every source before
 the participant runs; models never query storage or invent source identifiers.
 
-Planning is intentionally one stage and one explicitly selected participant.
-The prompt contains only accepted conclusions and compact material context, and
-permits narrow local read/search. A valid response receives no automatic peer
-review or synthesis. One corrective call is reserved for invalid structured
-output and reuses the prior response with tools disabled.
+Planning requires at least two available participants. Without an explicit
+selection it uses every configured participant. Each participant first creates
+an independent plan with narrow local read/search. A rotating author then
+creates one joint candidate from the normalized plans with no tools. Every
+original author audits that candidate in parallel against its own plan and the
+frozen sources. If any audit contains criticism, a different rotating
+participant performs one final assembly.
+
+The joint candidate maps every qualified source task to an incorporated,
+merged, omitted, variant, or unmapped disposition. Audits and final dispositions
+also use stable qualified identifiers. Ego fills missing mappings
+deterministically and never treats silence as resolution. A material criticism
+that is not explicitly applied, an unmapped contribution, a missing audit, or a
+variant becomes a blocking issue. Blocking plans remain inspectable but cannot
+be approved. There is no voting or automatic retry loop.
+
+Only independent planning may inspect the workspace. Later stages receive
+compact structured sources and prior planning records with tools disabled.
+Each invalid structured response retains one corrective call; that correction
+receives only the prior response and validation error rather than repeating
+the full planning context.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`
 atomically below `.ego/plans/<slug>-<id>/`. It rejects absolute destinations,
 traversal, symlinks, existing targets, and unexpected files. Plans start as
 `draft`; approval, rejection, and supersession are append-only human actions.
-Ego never executes an approved plan.
+Independent plans, the joint candidate, audits, and final dispositions remain
+in the typed persisted result. The portable artifact exposes the final plan,
+source snapshots, participants, variants, and blockers without asking a Builder
+to reconcile model discussion. Ego never executes an approved plan.
 
 ## Safety invariant
 

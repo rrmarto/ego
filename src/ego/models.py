@@ -43,7 +43,11 @@ class InvestigationPhase(StrEnum):
 
 
 class PlanPhase(StrEnum):
+    INDEPENDENT = "plan_draft"
     DRAFT = "plan_draft"
+    JOINT_DRAFT = "plan_joint_draft"
+    AUTHOR_AUDIT = "plan_author_audit"
+    FINAL_ASSEMBLY = "plan_final_assembly"
 
 
 WorkStage = Phase | InvestigationPhase | PlanPhase
@@ -311,6 +315,83 @@ class PlanDraft(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
+class PlanCoverageDisposition(StrEnum):
+    INCORPORATED = "incorporated"
+    MERGED = "merged"
+    OMITTED = "omitted"
+    VARIANT = "variant"
+    UNMAPPED = "unmapped"
+
+
+class PlanCoverage(BaseModel):
+    source_task_id: str
+    disposition: PlanCoverageDisposition
+    target_task_ids: list[str] = Field(default_factory=list)
+    rationale: str
+
+
+class PlanVariant(BaseModel):
+    id: str
+    question: str
+    options: list[str] = Field(min_length=2)
+    source_task_ids: list[str] = Field(default_factory=list)
+
+
+class JointPlanDraft(BaseModel):
+    draft: PlanDraft
+    coverage: list[PlanCoverage] = Field(default_factory=list)
+    variants: list[PlanVariant] = Field(default_factory=list)
+
+
+class PlanCritiqueSeverity(StrEnum):
+    ADVISORY = "advisory"
+    MATERIAL = "material"
+
+
+class PlanCritiqueCategory(StrEnum):
+    OMISSION = "omission"
+    INCORRECT_ADDITION = "incorrect_addition"
+    INCORRECT_MERGE = "incorrect_merge"
+    DEPENDENCY = "dependency"
+    VALIDATION = "validation"
+    RISK = "risk"
+    CONSTRAINT = "constraint"
+    VARIANT = "variant"
+
+
+class PlanCritique(BaseModel):
+    id: str
+    severity: PlanCritiqueSeverity
+    category: PlanCritiqueCategory
+    description: str
+    required_change: str
+    source_task_ids: list[str] = Field(default_factory=list)
+    candidate_task_ids: list[str] = Field(default_factory=list)
+
+
+class PlanAudit(BaseModel):
+    criticisms: list[PlanCritique] = Field(default_factory=list)
+
+
+class CritiqueDispositionAction(StrEnum):
+    APPLIED = "applied"
+    NOT_APPLICABLE = "not_applicable"
+    VARIANT = "variant"
+
+
+class CritiqueDisposition(BaseModel):
+    critique_id: str
+    action: CritiqueDispositionAction
+    target_task_ids: list[str] = Field(default_factory=list)
+    rationale: str
+
+
+class FinalPlanAssembly(BaseModel):
+    draft: PlanDraft
+    critique_dispositions: list[CritiqueDisposition] = Field(default_factory=list)
+    variants: list[PlanVariant] = Field(default_factory=list)
+
+
 class PlanState(StrEnum):
     DRAFT = "draft"
     APPROVED = "approved"
@@ -332,6 +413,12 @@ class ImplementationPlan(BaseModel):
     workspace: Path
     decision_ids: list[str]
     sources: list[PlanSource] = Field(default_factory=list)
+    participant_plans: dict[str, PlanDraft] = Field(default_factory=dict)
+    joint_draft: JointPlanDraft | None = None
+    audits: dict[str, PlanAudit] = Field(default_factory=dict)
+    final_assembly: FinalPlanAssembly | None = None
+    variants: list[PlanVariant] = Field(default_factory=list)
+    blocking_issues: list[str] = Field(default_factory=list)
     artifact_path: Path
     workspace_git_head: str | None = None
     manifest_sha256: str
@@ -358,6 +445,11 @@ class TurnRequest(BaseModel):
     investigation_reviews: dict[str, list[InvestigationReview]] = Field(default_factory=dict)
     investigation_syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
     plan_sources: list[PlanSource] = Field(default_factory=list)
+    plan_candidates: dict[str, PlanDraft] = Field(default_factory=dict)
+    plan_author_id: str | None = None
+    own_plan: PlanDraft | None = None
+    joint_plan: JointPlanDraft | None = None
+    plan_audits: dict[str, PlanAudit] = Field(default_factory=dict)
 
 
 class UsageMetrics(BaseModel):
@@ -379,6 +471,9 @@ class ParticipantTurnResult(BaseModel):
         | InvestigationReviewBundle
         | InvestigationSynthesis
         | PlanDraft
+        | JointPlanDraft
+        | PlanAudit
+        | FinalPlanAssembly
     )
     raw_output: str
     duration_seconds: float

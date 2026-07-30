@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ego.models import PlanDraft, PlanSource
+from ego.models import PlanDraft, PlanSource, PlanVariant
 
 ARTIFACT_FILES = frozenset({"plan.md", "sources.json", "manifest.json"})
 
@@ -39,6 +39,9 @@ class PlanArtifactWriter:
         sources: list[PlanSource],
         destination: Path | None,
         workspace_git_head: str | None,
+        participant_ids: list[str] | None = None,
+        variants: list[PlanVariant] | None = None,
+        blocking_issues: list[str] | None = None,
     ) -> WrittenPlanArtifact:
         root = workspace / ".ego" / "plans"
         target = self._target(root, workspace, draft.title, plan_id, destination)
@@ -59,18 +62,28 @@ class PlanArtifactWriter:
                 )
                 + "\n",
             )
-            self._write_text(plan_path, render_markdown(draft, sources))
+            self._write_text(
+                plan_path,
+                render_markdown(
+                    draft,
+                    sources,
+                    variants=variants or [],
+                    blocking_issues=blocking_issues or [],
+                ),
+            )
             file_hashes = {
                 "plan.md": _sha256(plan_path.read_bytes()),
                 "sources.json": _sha256(sources_path.read_bytes()),
             }
             manifest = {
-                "artifact_version": 2,
+                "artifact_version": 3,
                 "plan_id": plan_id,
                 "run_id": run_id,
                 "state": "draft",
                 "format": "markdown",
                 "sources": [_source_reference(item) for item in sources],
+                "participants": participant_ids or [],
+                "blocking_issues": blocking_issues or [],
                 "workspace": str(workspace),
                 "workspace_git_head": workspace_git_head,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -170,6 +183,9 @@ def _sha256(value: bytes) -> str:
 def render_markdown(
     draft: PlanDraft,
     sources: list[PlanSource],
+    *,
+    variants: list[PlanVariant] | None = None,
+    blocking_issues: list[str] | None = None,
 ) -> str:
     lines = [
         f"# {draft.title}",
@@ -201,6 +217,12 @@ def render_markdown(
     _list_section(lines, "Validation", draft.validation)
     _list_section(lines, "Risks", draft.risks)
     _list_section(lines, "Open questions", draft.open_questions)
+    if variants:
+        lines.extend(("", "## Variants requiring resolution", ""))
+        for variant in variants:
+            lines.extend((f"### {variant.id}", "", variant.question, ""))
+            lines.extend(f"- {option}" for option in variant.options)
+    _list_section(lines, "Blocking issues", blocking_issues or [])
     return "\n".join(lines).rstrip() + "\n"
 
 

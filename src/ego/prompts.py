@@ -7,12 +7,15 @@ from typing import cast
 from pydantic import BaseModel
 
 from ego.models import (
+    FinalPlanAssembly,
     InvestigationDraft,
     InvestigationPhase,
     InvestigationReviewBundle,
     InvestigationSynthesis,
+    JointPlanDraft,
     PeerReviewBundle,
     Phase,
+    PlanAudit,
     PlanDraft,
     PlanPhase,
     Position,
@@ -24,7 +27,13 @@ from ego.models import (
 
 def response_model(phase: WorkStage) -> type[BaseModel]:
     if isinstance(phase, PlanPhase):
-        return PlanDraft
+        if phase is PlanPhase.INDEPENDENT:
+            return PlanDraft
+        if phase is PlanPhase.JOINT_DRAFT:
+            return JointPlanDraft
+        if phase is PlanPhase.AUTHOR_AUDIT:
+            return PlanAudit
+        return FinalPlanAssembly
     if isinstance(phase, InvestigationPhase):
         if phase in {InvestigationPhase.INDEPENDENT, InvestigationPhase.REVISION}:
             return InvestigationDraft
@@ -136,8 +145,32 @@ def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> N
 
 
 def _validate_plan_response(response: BaseModel) -> None:
-    if not isinstance(response, PlanDraft):
-        raise ValueError("plan stage requires a plan draft")
+    if isinstance(response, PlanDraft):
+        _validate_plan_draft(response)
+        return
+    if isinstance(response, JointPlanDraft):
+        _validate_plan_draft(response.draft)
+        _validate_unique_ids(
+            [item.source_task_id for item in response.coverage],
+            "plan coverage source task",
+        )
+        _validate_unique_ids([item.id for item in response.variants], "plan variant")
+        return
+    if isinstance(response, PlanAudit):
+        _validate_unique_ids([item.id for item in response.criticisms], "plan critique")
+        return
+    if isinstance(response, FinalPlanAssembly):
+        _validate_plan_draft(response.draft)
+        _validate_unique_ids(
+            [item.critique_id for item in response.critique_dispositions],
+            "critique disposition",
+        )
+        _validate_unique_ids([item.id for item in response.variants], "plan variant")
+        return
+    raise ValueError("unsupported structured Plan response")
+
+
+def _validate_plan_draft(response: PlanDraft) -> None:
     if len(response.title.strip()) < 4 or len(response.objective.strip()) < 12:
         raise ValueError("plan requires a substantive title and objective")
     if not response.tasks:
@@ -168,6 +201,12 @@ def _validate_plan_response(response: BaseModel) -> None:
     )
     if unsafe_paths:
         raise ValueError("plan contains unsafe affected paths: " + ", ".join(unsafe_paths))
+
+
+def _validate_unique_ids(values: list[str], label: str) -> None:
+    normalized = [value.strip() for value in values]
+    if any(not value for value in normalized) or len(set(normalized)) != len(normalized):
+        raise ValueError(f"{label} identifiers must be non-empty and unique")
 
 
 def _strict_schema(value: object) -> object:
@@ -272,6 +311,9 @@ def _build_plan_prompt(
     correction: str | None,
     previous_response: object | None,
 ) -> str:
+    phase = request.phase
+    if not isinstance(phase, PlanPhase):
+        raise TypeError("plan prompt requires a planning stage")
     correction_text = ""
     if correction and previous_response is not None:
         correction_text = (
@@ -288,43 +330,52 @@ def _build_plan_prompt(
         if request.tool_policy.read
         else "Use only the supplied context and no tools."
     )
-    sources: list[dict[str, object]] = []
+    context: dict[str, object] | str = "Omitted on correction."
+    instructions = _plan_stage_instructions(phase)
     if previous_response is None:
-        for item in request.plan_sources:
-            if item.source_kind == "decision":
-                evidence = [
-                    {
-                        key: evidence_value
-                        for key, evidence_value in evidence_item.model_dump(mode="json").items()
-                        if key not in {"file_sha256", "fragment_sha256", "validation_error"}
-                    }
-                    for evidence_item in item.evidence
-                ]
-                sources.append(
-                    {
-                        "source_kind": item.source_kind,
-                        "decision_id": item.decision_id,
-                        "question": item.question,
-                        "conclusion": item.conclusion,
-                        "conclusion_source": item.conclusion_source,
-                        "rationale": item.rationale,
-                        "constraints": item.constraints,
-                        "non_goals": item.non_goals,
-                        "assumptions": item.assumptions,
-                        "risks": item.risks,
-                        "human_note": item.human_note,
-                        "evidence": evidence,
-                    }
-                )
-            else:
-                sources.append(item.model_dump(mode="json", exclude={"created_at"}))
-    return f"""You are the planner in Ego. Translate the supplied accepted decisions or explicit
-human instruction into one concise, implementation-ready plan. Do not reconsider, replace, or
-expand the supplied direction.
-If a material product or architecture choice is missing, record it under open_questions instead of
-deciding it. {tool_instruction}
-Keep tasks minimal, ordered, independently verifiable, and grounded in the current workspace.
-Use relative affected paths. Do not include prose that does not help an implementation agent.
+        context = {
+            "sources": _compact_plan_sources(
+                request,
+                include_evidence=phase is PlanPhase.INDEPENDENT,
+            )
+        }
+        if phase is PlanPhase.JOINT_DRAFT:
+            context["candidate_plans"] = _candidate_plans(request.plan_candidates)
+        elif phase is PlanPhase.AUTHOR_AUDIT:
+            context.update(
+                {
+                    "own_plan": (
+                        request.own_plan.model_dump(mode="json")
+                        if request.own_plan is not None
+                        else None
+                    ),
+                    "own_task_ids": _own_task_ids(request),
+                    "joint_plan": (
+                        request.joint_plan.model_dump(mode="json")
+                        if request.joint_plan is not None
+                        else None
+                    ),
+                }
+            )
+        elif phase is PlanPhase.FINAL_ASSEMBLY:
+            context.update(
+                {
+                    "joint_plan": (
+                        request.joint_plan.model_dump(mode="json")
+                        if request.joint_plan is not None
+                        else None
+                    ),
+                    "audits": {
+                        participant_id: audit.model_dump(mode="json")
+                        for participant_id, audit in request.plan_audits.items()
+                    },
+                }
+            )
+    return f"""You are a collaborative planner in Ego. The supplied direction is frozen: do not
+reconsider what product to build or silently make a missing product or architecture decision.
+{instructions} {tool_instruction}
+Keep output concise, ordered, independently verifiable, and grounded in the supplied context.
+Use only relative affected paths. Preserve material disagreement as variants or open questions.
 Respond in {request.language}.
 
 Agent: {request.agent_id}
@@ -332,12 +383,111 @@ Workflow: {request.workflow_id}
 Stage: {request.phase.value}
 Task: {request.question}
 {correction_text}
-Plan sources:
-{json.dumps(sources, ensure_ascii=False) if sources else "Omitted on correction."}
+Context:
+{json.dumps(context, ensure_ascii=False)}
 
 Return only JSON matching this schema:
 {json.dumps(response_schema(request.phase), ensure_ascii=False)}
 """
+
+
+def _plan_stage_instructions(phase: PlanPhase) -> str:
+    if phase is PlanPhase.INDEPENDENT:
+        return (
+            "Create an independent implementation plan. Inspect only the minimum workspace "
+            "surface needed. Do not imitate an assumed peer plan. Give every task a short, "
+            "stable id."
+        )
+    if phase is PlanPhase.JOINT_DRAFT:
+        return (
+            "Create one joint candidate from every independent plan. Merge compatible work, "
+            "order dependencies, and retain unique useful work. For every source task use the "
+            "exact qualified id shown in candidate_plans and provide one coverage disposition. "
+            "Never omit a task silently; incompatible approaches become variants."
+        )
+    if phase is PlanPhase.AUTHOR_AUDIT:
+        return (
+            "Audit the joint candidate strictly against your own independent plan and the frozen "
+            "sources. Report only concrete omissions, incorrect additions or merges, dependency "
+            "errors, lost constraints, risks, validation gaps, or variants. Each criticism must "
+            "be self-contained and identify the required change. Return no criticism when the "
+            "joint candidate preserves your material contribution correctly."
+        )
+    return (
+        "Revise the joint candidate using every audit. Return one disposition for every exact "
+        "critique id. Apply compatible corrections. A material criticism that cannot be applied "
+        "must remain explicit as a variant; never discard it silently. Preserve the ids and exact "
+        "content of joint tasks not targeted by an applied criticism."
+    )
+
+
+def _compact_plan_sources(
+    request: TurnRequest,
+    *,
+    include_evidence: bool,
+) -> list[dict[str, object]]:
+    sources: list[dict[str, object]] = []
+    for item in request.plan_sources:
+        if item.source_kind != "decision":
+            sources.append(item.model_dump(mode="json", exclude={"created_at"}))
+            continue
+        source: dict[str, object] = {
+            "source_kind": item.source_kind,
+            "decision_id": item.decision_id,
+            "question": item.question,
+            "conclusion": item.conclusion,
+            "conclusion_source": item.conclusion_source,
+            "constraints": item.constraints,
+            "non_goals": item.non_goals,
+            "risks": item.risks,
+            "human_note": item.human_note,
+        }
+        if include_evidence:
+            source.update(
+                {
+                    "rationale": item.rationale,
+                    "assumptions": item.assumptions,
+                    "evidence": [
+                        {
+                            key: evidence_value
+                            for key, evidence_value in evidence_item.model_dump(
+                                mode="json"
+                            ).items()
+                            if key
+                            not in {
+                                "file_sha256",
+                                "fragment_sha256",
+                                "validation_error",
+                            }
+                        }
+                        for evidence_item in item.evidence
+                    ],
+                }
+            )
+        sources.append(source)
+    return sources
+
+
+def _candidate_plans(candidates: dict[str, PlanDraft]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for participant_id, draft in candidates.items():
+        value = draft.model_dump(mode="json")
+        tasks = value.get("tasks")
+        if isinstance(tasks, list):
+            for task in tasks:
+                if isinstance(task, dict) and isinstance(task.get("id"), str):
+                    task["source_task_id"] = f"{participant_id}:{task['id']}"
+        result[participant_id] = value
+    return result
+
+
+def _own_task_ids(request: TurnRequest) -> list[str]:
+    if request.own_plan is None or request.plan_author_id is None:
+        return []
+    return [
+        f"{request.plan_author_id}:{task.id}"
+        for task in request.own_plan.tasks
+    ]
 
 
 def _build_investigation_prompt(

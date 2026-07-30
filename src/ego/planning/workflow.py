@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -15,24 +12,25 @@ from ego.agents.runtime import AgentRuntime, NoParticipantsError
 from ego.events import WorkEventType
 from ego.models import (
     AcceptedDecisionPackage,
-    HumanPlanBrief,
+    FinalPlanAssembly,
     ImplementationPlan,
-    PlanDraft,
     PlanFormat,
-    PlanPhase,
-    PlanSource,
     PlanState,
     RunStatus,
-    ToolPolicy,
-    TurnRequest,
 )
 from ego.participants import Participant
 from ego.planning.artifacts import PlanArtifactWriter
+from ego.planning.assembly import (
+    apply_source_contract,
+    blocking_issues,
+    merge_variants,
+    normalize_final_assembly,
+    normalize_joint_draft,
+)
+from ego.planning.collaboration import PlanCollaboration
+from ego.planning.sources import MAX_PLAN_BRIEF_CHARS, resolve_plan_sources
 from ego.storage import Database
 from ego.workspace import observe_git
-
-MAX_PLAN_BRIEF_CHARS = 12_000
-MAX_PLAN_BRIEF_BYTES = 48_000
 
 
 class PlanInput(AgentInput):
@@ -81,14 +79,22 @@ class PlanWorkflow:
     ) -> None:
         self.database = database
         self.runtime = AgentRuntime(database, participants)
+        self.collaboration = PlanCollaboration(self.runtime)
         self.writer = writer or PlanArtifactWriter()
 
     async def plan(self, request: PlanInput) -> PlanOutcome:
         if request.format is not PlanFormat.MARKDOWN:
             raise ValueError(f"unsupported plan format: {request.format.value}")
-        if len(request.participant_ids) != 1:
-            raise ValueError("Plan requires exactly one explicitly selected participant")
-        sources = self._resolve_sources(request)
+        selected_ids = request.participant_ids or list(self.runtime.participants)
+        if len(selected_ids) < 2:
+            raise ValueError("Plan requires at least two selected participants")
+        sources = resolve_plan_sources(
+            self.database,
+            workspace=request.workspace,
+            decision_ids=request.decision_ids,
+            brief=request.brief,
+            brief_file=request.brief_file,
+        )
         decisions = [
             source for source in sources if isinstance(source, AcceptedDecisionPackage)
         ]
@@ -106,45 +112,86 @@ class PlanWorkflow:
         )
         self.database.set_run_status(run_id, RunStatus.RUNNING)
         try:
-            active = await self.runtime.active_participants(run_id, request.participant_ids)
-            if not active:
-                raise NoParticipantsError("selected participant did not pass availability checks")
-            participant_id, participant = next(iter(active.items()))
-            results = await self.runtime.parallel(
+            active = await self.runtime.active_participants(run_id, selected_ids)
+            if len(active) < 2:
+                raise NoParticipantsError(
+                    "Plan requires at least two participants that pass availability checks"
+                )
+            candidates = await self.collaboration.independent_plans(
                 run_id,
-                PlanPhase.DRAFT,
-                {
-                    participant_id: (
-                        participant,
-                        TurnRequest(
-                            run_id=run_id,
-                            phase=PlanPhase.DRAFT,
-                            question=request.question,
-                            workspace=request.workspace,
-                            agent_id="plan",
-                            workflow_id=self.workflow_id,
-                            tool_policy=ToolPolicy.local_read_only(),
-                            plan_sources=sources,
-                        ),
+                request,
+                sources,
+                active,
+            )
+            if len(candidates) < 2:
+                raise NoParticipantsError(
+                    "fewer than two participants produced valid independent plans"
+                )
+            warnings = [
+                f"{participant_id} did not produce a valid independent plan."
+                for participant_id in active
+                if participant_id not in candidates
+            ]
+            joint_author, final_author = self.runtime.rotating_pair(run_id, candidates)
+            joint = await self.collaboration.joint_draft(
+                run_id,
+                request,
+                sources,
+                candidates,
+                joint_author,
+                active[joint_author],
+            )
+            joint, coverage_warnings = normalize_joint_draft(joint, candidates)
+            warnings.extend(coverage_warnings)
+            audits, missing_audits = await self.collaboration.author_audits(
+                run_id,
+                request,
+                sources,
+                candidates,
+                joint,
+                active,
+            )
+            warnings.extend(
+                f"{participant_id} did not produce a valid audit."
+                for participant_id in missing_audits
+            )
+            final_assembly: FinalPlanAssembly | None = None
+            if any(audit.criticisms for audit in audits.values()):
+                final_assembly = await self.collaboration.final_assembly(
+                    run_id,
+                    request,
+                    sources,
+                    joint,
+                    audits,
+                    final_author,
+                    active[final_author],
+                )
+                if final_assembly is None:
+                    warnings.append(
+                        f"{final_author} did not produce a valid final assembly; "
+                        "the joint candidate was preserved."
                     )
-                },
+            final_assembly, assembly_warnings = normalize_final_assembly(
+                final_assembly,
+                audits,
             )
-            result = results.get(participant_id)
-            if result is None or not isinstance(result.payload, PlanDraft):
-                raise NoParticipantsError("selected participant did not produce a valid plan")
-            source_constraints = _unique(
-                value for decision in decisions for value in decision.constraints
+            warnings.extend(assembly_warnings)
+            variants = merge_variants(
+                joint.variants,
+                [] if final_assembly is None else final_assembly.variants,
             )
-            source_non_goals = _unique(
-                value for decision in decisions for value in decision.non_goals
+            draft = joint.draft if final_assembly is None else final_assembly.draft
+            unresolved = blocking_issues(
+                joint,
+                audits,
+                final_assembly,
+                missing_audits,
+                variants,
             )
-            draft = result.payload.model_copy(
-                update={
-                    "constraints": _unique(
-                        [*source_constraints, *result.payload.constraints]
-                    ),
-                    "non_goals": _unique([*source_non_goals, *result.payload.non_goals]),
-                }
+            draft = apply_source_contract(
+                draft,
+                decisions,
+                variants,
             )
             plan_id = str(uuid.uuid4())
             artifact = self.writer.write(
@@ -155,13 +202,15 @@ class PlanWorkflow:
                 sources=sources,
                 destination=None if request.destination is None else Path(request.destination),
                 workspace_git_head=git_start.head,
+                participant_ids=sorted(candidates),
+                variants=variants,
+                blocking_issues=unresolved,
             )
             git_end = await observe_git(request.workspace)
-            warnings = (
-                ["The workspace Git revision changed while the plan was generated."]
-                if git_start.head != git_end.head
-                else []
-            )
+            if git_start.head != git_end.head:
+                warnings.append(
+                    "The workspace Git revision changed while the plan was generated."
+                )
             plan = ImplementationPlan(
                 plan_id=plan_id,
                 run_id=run_id,
@@ -170,6 +219,12 @@ class PlanWorkflow:
                 workspace=request.workspace,
                 decision_ids=decision_ids,
                 sources=sources,
+                participant_plans=candidates,
+                joint_draft=joint,
+                audits=audits,
+                final_assembly=final_assembly,
+                variants=variants,
+                blocking_issues=unresolved,
                 artifact_path=artifact.path.relative_to(request.workspace),
                 workspace_git_head=git_start.head,
                 manifest_sha256=artifact.manifest_sha256,
@@ -197,69 +252,3 @@ class PlanWorkflow:
         except BaseException:
             self.database.set_run_status(run_id, RunStatus.FAILED)
             raise
-
-    def _resolve_sources(self, request: PlanInput) -> list[PlanSource]:
-        if request.decision_ids:
-            decision_ids = list(dict.fromkeys(request.decision_ids))
-            return [
-                self.database.get_accepted_decision_package(
-                    decision_id,
-                    workspace=request.workspace,
-                )
-                for decision_id in decision_ids
-            ]
-        if request.brief is not None:
-            return [self._human_brief(request.brief, source_kind="text")]
-        if request.brief_file is None:
-            raise ValueError("Plan source is missing")
-        workspace = request.workspace.resolve()
-        candidate = request.brief_file
-        if not candidate.is_absolute():
-            candidate = workspace / candidate
-        try:
-            source_path = candidate.resolve(strict=True)
-            relative_path = source_path.relative_to(workspace)
-        except (FileNotFoundError, ValueError) as error:
-            raise ValueError("plan source file must exist inside the workspace") from error
-        if not source_path.is_file():
-            raise ValueError("plan source file must be a regular file")
-        if source_path.stat().st_size > MAX_PLAN_BRIEF_BYTES:
-            raise ValueError(
-                f"plan source file exceeds the {MAX_PLAN_BRIEF_BYTES}-byte limit"
-            )
-        try:
-            instruction = source_path.read_text(encoding="utf-8").strip()
-        except UnicodeDecodeError as error:
-            raise ValueError("plan source file must be UTF-8 text") from error
-        if not instruction:
-            raise ValueError("plan source file cannot be empty")
-        if len(instruction) > MAX_PLAN_BRIEF_CHARS:
-            raise ValueError(
-                f"plan source file exceeds the {MAX_PLAN_BRIEF_CHARS}-character limit"
-            )
-        return [
-            self._human_brief(
-                instruction,
-                source_kind="file",
-                source_path=str(relative_path),
-            )
-        ]
-
-    @staticmethod
-    def _human_brief(
-        instruction: str,
-        *,
-        source_kind: Literal["text", "file"],
-        source_path: str | None = None,
-    ) -> HumanPlanBrief:
-        return HumanPlanBrief(
-            source_kind=source_kind,
-            brief_id=str(uuid.uuid4()),
-            instruction=instruction,
-            source_path=source_path,
-            created_at=datetime.now(UTC).isoformat(),
-        )
-
-
-def _unique(values: Iterable[str]) -> list[str]:
-    return list(dict.fromkeys(values))

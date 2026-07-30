@@ -34,8 +34,18 @@ INVESTIGATION_PHASE_LABELS = {
     InvestigationPhase.SYNTHESIS: "Cross synthesis",
     InvestigationPhase.RECONCILIATION: "Reconciliation",
 }
-PLAN_PHASES: tuple[WorkStage, ...] = (PlanPhase.DRAFT,)
-PLAN_PHASE_LABELS = {PlanPhase.DRAFT: "Implementation plan"}
+PLAN_PHASES: tuple[WorkStage, ...] = (
+    PlanPhase.INDEPENDENT,
+    PlanPhase.JOINT_DRAFT,
+    PlanPhase.AUTHOR_AUDIT,
+    PlanPhase.FINAL_ASSEMBLY,
+)
+PLAN_PHASE_LABELS = {
+    PlanPhase.INDEPENDENT: "Independent plans",
+    PlanPhase.JOINT_DRAFT: "Joint draft",
+    PlanPhase.AUTHOR_AUDIT: "Author audits",
+    PlanPhase.FINAL_ASSEMBLY: "Final assembly",
+}
 
 
 @dataclass

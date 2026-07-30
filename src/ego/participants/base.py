@@ -14,13 +14,16 @@ from typing import Protocol, cast
 from ego.config import EgoConfig, ParticipantConfig
 from ego.models import (
     AvailabilityStatus,
+    FinalPlanAssembly,
     InvestigationDraft,
     InvestigationPhase,
     InvestigationReviewBundle,
     InvestigationSynthesis,
+    JointPlanDraft,
     ParticipantAvailability,
     ParticipantTurnResult,
     PeerReviewBundle,
+    PlanAudit,
     PlanDraft,
     PlanPhase,
     Position,
@@ -331,7 +334,10 @@ class CliParticipant(ABC):
                         | InvestigationDraft
                         | InvestigationReviewBundle
                         | InvestigationSynthesis
-                        | PlanDraft,
+                        | PlanDraft
+                        | JointPlanDraft
+                        | PlanAudit
+                        | FinalPlanAssembly,
                         payload,
                     ),
                     raw_output="\n--- correction attempt ---\n".join(raw_outputs),

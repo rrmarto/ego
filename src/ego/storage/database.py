@@ -970,13 +970,16 @@ class Database:
             raise ValueError(f"unsupported plan transition: {state.value}")
         with self.connect() as connection:
             current = connection.execute(
-                "SELECT run_id, state FROM plans WHERE id = ?",
+                "SELECT run_id, state, plan_json FROM plans WHERE id = ?",
                 (plan_id,),
             ).fetchone()
             if current is None:
                 raise KeyError(plan_id)
             if current["state"] != PlanState.DRAFT.value:
                 raise ValueError(f"plan is already {current['state']}")
+            plan = ImplementationPlan.model_validate_json(current["plan_json"])
+            if state is PlanState.APPROVED and plan.blocking_issues:
+                raise ValueError("plan has unresolved blocking issues")
             now = utc_now()
             connection.execute(
                 """UPDATE plans SET state = ?, manifest_sha256 = ?, updated_at = ?

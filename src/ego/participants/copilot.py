@@ -11,7 +11,7 @@ class CopilotParticipant(CliParticipant):
     def command(self, binary: str, schema: dict[str, object], request: TurnRequest) -> list[str]:
         del schema
         denied = "shell,write,url,memory,web_fetch,web_search,task,delegate,mcp"
-        if request.agent_id == "investigate" and not request.tool_policy.read:
+        if request.agent_id in {"investigate", "plan"} and not request.tool_policy.read:
             denied += ",read,glob,grep,search"
         command = [
             binary,

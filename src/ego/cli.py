@@ -403,9 +403,12 @@ def render_plan(plan: ImplementationPlan, run: dict[str, Any] | None = None) -> 
     typer.echo(f"State: {plan.state.value}")
     typer.echo(f"Format: {plan.format.value}")
     typer.echo(f"Artifact: {plan.workspace / plan.artifact_path}")
+    typer.echo(f"Participants: {len(plan.participant_plans)}")
     typer.echo(f"Tasks: {len(plan.draft.tasks)}")
     if plan.draft.open_questions:
         typer.echo(f"Open questions: {len(plan.draft.open_questions)}")
+    if plan.blocking_issues:
+        typer.echo(f"Blocking issues: {len(plan.blocking_issues)}")
     if run is not None:
         calls = run["calls"]
         reported = [item for item in calls if item["total_tokens"] is not None]
@@ -546,13 +549,17 @@ def investigate(
 
 @app.command()
 def plan(
-    participant: Annotated[
-        str,
-        typer.Option("--participant", "-p", help="Single participant used for planning."),
-    ],
     text: Annotated[
         str | None,
         typer.Argument(help="Direct implementation instruction."),
+    ] = None,
+    participant: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--participant",
+            "-p",
+            help="Restrict planning participants; defaults to all configured participants.",
+        ),
     ] = None,
     decision_ids: Annotated[
         list[str] | None,
@@ -575,8 +582,10 @@ def plan(
 ) -> None:
     """Create a portable implementation plan from text, decisions, or a file."""
     _, database, participants = services()
-    if participant not in participants:
-        raise typer.BadParameter(f"unknown participant: {participant}")
+    selected = participant or list(participants)
+    unknown = sorted(set(selected) - set(participants))
+    if unknown:
+        raise typer.BadParameter("unknown participants: " + ", ".join(unknown))
     workspace = resolve_workspace(directory)
     registry = build_agent_registry(database, participants)
     try:
@@ -591,7 +600,7 @@ def plan(
                 )
             ),
             workspace=workspace,
-            participant_ids=[participant],
+            participant_ids=selected,
             command="plan",
             decision_ids=decision_ids or [],
             brief=text,
@@ -764,6 +773,11 @@ def transition_plan(plan_id: str, state: PlanState, note: str | None) -> None:
         if row["state"] != PlanState.DRAFT.value:
             raise ValueError(f"plan is already {row['state']}")
         plan_record = ImplementationPlan.model_validate(row["plan"])
+        if state is PlanState.APPROVED and plan_record.blocking_issues:
+            raise ValueError(
+                "plan has unresolved blocking issues and cannot be approved; "
+                "resolve the source decisions and create a new plan"
+            )
         manifest_sha256 = PlanArtifactWriter().update_state(
             workspace=plan_record.workspace,
             artifact_path=plan_record.artifact_path,
@@ -847,7 +861,7 @@ def transition(decision_id: str, state: str, note: str | None) -> None:
     typer.echo(f"Decision {decision_id} is now {state}.")
     if state == "accepted":
         typer.echo(
-            f"Create a plan later with `ego plan {decision_id} --participant <participant>`."
+            f"Create a plan later with `ego plan --decision {decision_id}`."
         )
 
 
@@ -886,7 +900,7 @@ def choose_decision(
         f"Decision {decision_id} accepted alternative {alternative}:\n"
         f"{resolution['recommendation']}"
     )
-    typer.echo(f"Create a plan with `ego plan {decision_id} --participant <participant>`.")
+    typer.echo(f"Create a plan with `ego plan --decision {decision_id}`.")
 
 
 @decisions_app.command("decide")
@@ -907,7 +921,7 @@ def decide_decision(
         f"Decision {decision_id} accepted with human resolution:\n"
         f"{resolution['recommendation']}"
     )
-    typer.echo(f"Create a plan with `ego plan {decision_id} --participant <participant>`.")
+    typer.echo(f"Create a plan with `ego plan --decision {decision_id}`.")
 
 
 @app.command()
