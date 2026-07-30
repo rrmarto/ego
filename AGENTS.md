@@ -4,7 +4,10 @@ Read `docs/architecture.md` and the ADRs in `docs/decisions/` before changing
 or extending the harness.
 
 - Ego v1 is a decision-support tool. It must never implement a recommendation.
-- A target workspace is real user data. Never modify its permissions or contents.
+- A target workspace is real user data. Never modify its permissions. Decision,
+  Investigation, and participant processes must not modify its contents.
+  Plan may create new, validated artifacts only under `.ego/plans/` through
+  Ego's deterministic artifact writer; it has no general workspace write access.
 - Every participant must pass the external macOS Seatbelt check before it can
   run. Native read-only controls remain mandatory unless an accepted ADR
   documents that they cannot be nested; such adapters must declare the

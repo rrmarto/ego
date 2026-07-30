@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel
@@ -12,6 +13,8 @@ from ego.models import (
     InvestigationSynthesis,
     PeerReviewBundle,
     Phase,
+    PlanDraft,
+    PlanPhase,
     Position,
     Synthesis,
     TurnRequest,
@@ -20,6 +23,8 @@ from ego.models import (
 
 
 def response_model(phase: WorkStage) -> type[BaseModel]:
+    if isinstance(phase, PlanPhase):
+        return PlanDraft
     if isinstance(phase, InvestigationPhase):
         if phase in {InvestigationPhase.INDEPENDENT, InvestigationPhase.REVISION}:
             return InvestigationDraft
@@ -39,6 +44,9 @@ def response_schema(phase: WorkStage) -> dict[str, object]:
 
 
 def validate_response(request: TurnRequest, response: BaseModel) -> None:
+    if isinstance(request.phase, PlanPhase):
+        _validate_plan_response(response)
+        return
     if isinstance(request.phase, InvestigationPhase):
         _validate_investigation_response(request, response)
         return
@@ -127,6 +135,41 @@ def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> N
         raise ValueError("; ".join(errors))
 
 
+def _validate_plan_response(response: BaseModel) -> None:
+    if not isinstance(response, PlanDraft):
+        raise ValueError("plan stage requires a plan draft")
+    if len(response.title.strip()) < 4 or len(response.objective.strip()) < 12:
+        raise ValueError("plan requires a substantive title and objective")
+    if not response.tasks:
+        raise ValueError("plan requires at least one implementation task")
+    task_ids = [task.id.strip() for task in response.tasks]
+    if any(not task_id for task_id in task_ids) or len(set(task_ids)) != len(task_ids):
+        raise ValueError("plan task identifiers must be non-empty and unique")
+    known = set(task_ids)
+    unknown_dependencies = sorted(
+        {
+            dependency
+            for task in response.tasks
+            for dependency in task.depends_on
+            if dependency not in known
+        }
+    )
+    if unknown_dependencies:
+        raise ValueError(
+            "plan tasks reference unknown dependencies: " + ", ".join(unknown_dependencies)
+        )
+    unsafe_paths = sorted(
+        {
+            path
+            for task in response.tasks
+            for path in task.affected_paths
+            if Path(path).is_absolute() or ".." in Path(path).parts
+        }
+    )
+    if unsafe_paths:
+        raise ValueError("plan contains unsafe affected paths: " + ", ".join(unsafe_paths))
+
+
 def _strict_schema(value: object) -> object:
     if isinstance(value, list):
         return [_strict_schema(item) for item in value]
@@ -151,6 +194,12 @@ def build_prompt(
     correction: str | None = None,
     previous_response: object | None = None,
 ) -> str:
+    if isinstance(request.phase, PlanPhase):
+        return _build_plan_prompt(
+            request,
+            correction=correction,
+            previous_response=previous_response,
+        )
     if isinstance(request.phase, InvestigationPhase):
         return _build_investigation_prompt(
             request,
@@ -214,6 +263,75 @@ Context:
 
 Return only JSON matching this schema:
 {json.dumps(schema, ensure_ascii=False)}
+"""
+
+
+def _build_plan_prompt(
+    request: TurnRequest,
+    *,
+    correction: str | None,
+    previous_response: object | None,
+) -> str:
+    correction_text = ""
+    if correction and previous_response is not None:
+        correction_text = (
+            "\nRepair the previous structured plan. Do not inspect again or add scope. "
+            f"Resolve only this validation error: {correction}\n"
+            "Previous structured response:\n"
+            f"{json.dumps(previous_response, ensure_ascii=False)}\n"
+        )
+    elif correction:
+        correction_text = f"\nPrevious response validation error: {correction}\n"
+    tool_instruction = (
+        "Read and search only the minimum relevant workspace files. Do not use web, shell, "
+        "writes, plugins, MCP, or delegation."
+        if request.tool_policy.read
+        else "Use only the supplied context and no tools."
+    )
+    decisions: list[dict[str, object]] = []
+    if previous_response is None:
+        for item in request.accepted_decisions:
+            evidence = [
+                {
+                    key: evidence_value
+                    for key, evidence_value in evidence_item.model_dump(mode="json").items()
+                    if key not in {"file_sha256", "fragment_sha256", "validation_error"}
+                }
+                for evidence_item in item.evidence
+            ]
+            decisions.append(
+                {
+                    "decision_id": item.decision_id,
+                    "question": item.question,
+                    "conclusion": item.conclusion,
+                    "conclusion_source": item.conclusion_source,
+                    "rationale": item.rationale,
+                    "constraints": item.constraints,
+                    "non_goals": item.non_goals,
+                    "assumptions": item.assumptions,
+                    "risks": item.risks,
+                    "human_note": item.human_note,
+                    "evidence": evidence,
+                }
+            )
+    return f"""You are the planner in Ego. Translate accepted human decisions into one concise,
+implementation-ready plan. Do not reconsider, replace, or expand the accepted conclusions.
+If a material product or architecture choice is missing, record it under open_questions instead of
+deciding it. {tool_instruction}
+Keep tasks minimal, ordered, independently verifiable, and grounded in the current workspace.
+Use relative affected paths. Do not include prose that does not help an implementation agent.
+Respond in {request.language}.
+
+Agent: {request.agent_id}
+Workflow: {request.workflow_id}
+Stage: {request.phase.value}
+Task: {request.question}
+{correction_text}
+Accepted decisions:
+{json.dumps(decisions, ensure_ascii=False) if decisions else "Omitted on correction."}
+
+Return only JSON matching this schema:
+{json.dumps(response_schema(request.phase), ensure_ascii=False)}
 """
 
 

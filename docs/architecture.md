@@ -2,7 +2,8 @@
 
 Ego is a Python CLI and internal workflow harness. It invokes authenticated
 local AI CLIs; it does not call model APIs. The target directory is used in
-place and must remain read-only.
+place. Participants remain read-only. The only workspace write owned by Ego is
+the deterministic export of a requested Plan artifact under `.ego/plans/`.
 
 ## Boundaries
 
@@ -19,6 +20,7 @@ place and must remain read-only.
 - `agents`: specialized-agent contracts, explicit registry, and common runtime.
 - `decision`: compatibility adapter for the existing decision workflow.
 - `investigation`: local-only investigation workflow and report finalization.
+- `planning`: accepted-decision resolution, one-call planning, and bounded artifacts.
 - `participants`: provider-specific probing and command construction.
 - `runner`: subprocess limits and the external Seatbelt boundary.
 - `workspace`: path and evidence validation plus lightweight Git observations.
@@ -139,8 +141,9 @@ positive evidence when the structured `safe` field is true.
 
 `SpecializedAgent` declares an identifier, description, input and output
 contracts, required capabilities, and exactly one workflow. The explicit
-registry exposes `decision` → `DecisionWorkflow` and `investigate` →
-`InvestigationWorkflow`. Automatic routing is intentionally absent.
+registry exposes `decision` → `DecisionWorkflow`, `investigate` →
+`InvestigationWorkflow`, and `plan` → `PlanWorkflow`. Automatic routing is
+intentionally absent.
 
 `AgentRuntime` owns participant discovery, mandatory Seatbelt checks, parallel
 turns, committed events, call persistence, cancellation propagation,
@@ -198,6 +201,26 @@ validation error with all tools disabled; it repairs the record instead of
 inspecting the workspace again. A response that cannot be decoded retains the
 existing full corrective fallback.
 
+## Planning invariant
+
+Plan accepts only Decision Records already resolved as `accepted` for the same
+canonical workspace. Ego resolves identifiers in SQLite and supplies complete
+`AcceptedDecisionPackage` values to the participant; models never query storage
+or invent source identifiers.
+
+Planning is intentionally one stage and one explicitly selected participant.
+The prompt contains only accepted conclusions and compact material context, and
+permits narrow local read/search. A valid response receives no automatic peer
+review or synthesis. One corrective call is reserved for invalid structured
+output and reuses the prior response with tools disabled.
+
+The participant returns a canonical `PlanDraft`; it cannot write. Ego's
+deterministic writer renders `plan.md`, `decisions.json`, and `manifest.json`
+atomically below `.ego/plans/<slug>-<id>/`. It rejects absolute destinations,
+traversal, symlinks, existing targets, and unexpected files. Plans start as
+`draft`; approval, rejection, and supersession are append-only human actions.
+Ego never executes an approved plan.
+
 ## Safety invariant
 
 An adapter is runnable only when its binary exists, its version exposes the
@@ -210,6 +233,12 @@ adapters therefore declare the external-only requirement and are refused if the
 external wrapper is not present. The stricter external profile also denies
 writes to durable user and system roots while leaving temporary runtime
 locations available.
+
+The participant Seatbelt boundary always denies workspace writes, including for
+Plan. The parent Ego process has one narrower capability documented by
+ADR-0013: `PlanArtifactWriter` may create or update only the allowlisted
+artifact files inside `.ego/plans/`. It cannot write source files, project
+configuration, permissions, ignore rules, or arbitrary destinations.
 
 Each Codex call uses an isolated temporary `CODEX_HOME` with a private
 authentication copy. Each OpenCode call uses isolated HOME and XDG directories
@@ -232,7 +261,8 @@ inconclusive; other changes cap confidence and are surfaced to the user.
 
 ## Persistence
 
-SQLite stores runs, participants, calls, events, decisions, and decision events.
+SQLite stores runs, participants, calls, events, decisions, decision events,
+plans, plan-decision links, and plan events.
 Runs identify their agent, workflow, result kind, and immutable structured
 result. Historical runs migrate to `decision` / `decision`. The decisions table
 remains exclusive to `DecisionAgent`.

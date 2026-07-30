@@ -43,13 +43,16 @@ def build_agent_registry(
 ) -> AgentRegistry:
     from ego.agents.decision import DecisionAgent
     from ego.agents.investigate import InvestigateAgent
+    from ego.agents.plan import PlanAgent
     from ego.decision import DecisionWorkflow
     from ego.deliberation import DeliberationEngine
     from ego.investigation import InvestigationWorkflow
+    from ego.planning import PlanWorkflow
 
     return AgentRegistry(
         [
             DecisionAgent(DecisionWorkflow(DeliberationEngine(database, participants))),
             InvestigateAgent(InvestigationWorkflow(database, participants)),
+            PlanAgent(PlanWorkflow(database, participants)),
         ]
     )

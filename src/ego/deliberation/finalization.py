@@ -65,6 +65,8 @@ def single_participant_final(run_id: str, position: Position) -> FinalDecision:
         disagreements=position.disagreements,
         assumptions=position.assumptions,
         risks=position.risks,
+        constraints=position.constraints,
+        non_goals=position.non_goals,
         confidence=Confidence.LOW,
         confidence_reason="Only one participant completed the deliberation.",
         evidence=evidence,
@@ -91,6 +93,8 @@ def final_from_synthesis(
         disagreements=synthesis.disagreements + synthesis.material_conflicts,
         assumptions=synthesis.assumptions,
         risks=synthesis.risks,
+        constraints=synthesis.constraints,
+        non_goals=synthesis.non_goals,
         confidence=confidence,
         confidence_reason=synthesis.confidence_reason,
         evidence=synthesis.evidence,
@@ -123,6 +127,10 @@ def contested_final(
         ),
         assumptions=list(dict.fromkeys(value for item in syntheses for value in item.assumptions)),
         risks=list(dict.fromkeys(value for item in syntheses for value in item.risks)),
+        constraints=list(
+            dict.fromkeys(value for item in syntheses for value in item.constraints)
+        ),
+        non_goals=list(dict.fromkeys(value for item in syntheses for value in item.non_goals)),
         confidence=Confidence.LOW,
         confidence_reason="The rotating synthesizers did not recognize equivalent conclusions.",
         evidence=unique_evidence(value for item in syntheses for value in item.evidence),

@@ -21,6 +21,8 @@ from ego.models import (
     ParticipantAvailability,
     ParticipantTurnResult,
     PeerReviewBundle,
+    PlanDraft,
+    PlanPhase,
     Position,
     Synthesis,
     ToolPolicy,
@@ -254,7 +256,7 @@ class CliParticipant(ABC):
         return self.config.model
 
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
-        if request.agent_id == "investigate":
+        if request.agent_id in {"investigate", "plan"}:
             prohibited = {
                 "web": request.tool_policy.web,
                 "shell": request.tool_policy.shell,
@@ -266,7 +268,8 @@ class CliParticipant(ABC):
             enabled = sorted(name for name, allowed in prohibited.items() if allowed)
             if enabled:
                 raise ParticipantError(
-                    "investigation requested prohibited capabilities: " + ", ".join(enabled)
+                    f"{request.agent_id} requested prohibited capabilities: "
+                    + ", ".join(enabled)
                 )
         availability = await self.probe()
         if availability.status is not AvailabilityStatus.AVAILABLE or not availability.binary:
@@ -282,7 +285,7 @@ class CliParticipant(ABC):
             turn_request = request
             if (
                 attempt
-                and isinstance(request.phase, InvestigationPhase)
+                and isinstance(request.phase, (InvestigationPhase, PlanPhase))
                 and previous_response is not None
             ):
                 turn_request = request.model_copy(update={"tool_policy": ToolPolicy()})
@@ -327,7 +330,8 @@ class CliParticipant(ABC):
                         | Synthesis
                         | InvestigationDraft
                         | InvestigationReviewBundle
-                        | InvestigationSynthesis,
+                        | InvestigationSynthesis
+                        | PlanDraft,
                         payload,
                     ),
                     raw_output="\n--- correction attempt ---\n".join(raw_outputs),

@@ -186,6 +186,9 @@ def test_contested_decision_requires_a_structured_human_resolution(
     ]
     assert decision["events"][-1]["state"] == "accepted"
     assert "Selected alternative 2" in decision["events"][-1]["note"]
+    package = database.get_accepted_decision_package(decision_id, workspace=tmp_path)
+    assert package.conclusion_source == "alternative"
+    assert package.conclusion == "Keep the current boundary."
 
 
 def test_contested_decision_can_record_a_custom_human_conclusion(
@@ -201,6 +204,9 @@ def test_contested_decision_can_record_a_custom_human_conclusion(
 
     assert resolution["resolution_type"] == "custom"
     assert database.get_decision(decision_id)["state"] == "accepted"
+    package = database.get_accepted_decision_package(decision_id, workspace=tmp_path)
+    assert package.conclusion_source == "custom"
+    assert package.conclusion == "Adopt the strict boundary after a compatibility test."
 
 
 def test_schema_one_database_is_migrated_for_human_resolutions(
@@ -240,7 +246,7 @@ def test_schema_one_database_is_migrated_for_human_resolutions(
             row["name"] for row in connection.execute("PRAGMA table_info(calls)").fetchall()
         }
 
-    assert version == 4
+    assert version == 5
     assert table is not None
     assert {"input_tokens", "output_tokens", "total_tokens", "cost_usd"} <= call_columns
 

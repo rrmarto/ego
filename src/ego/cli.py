@@ -24,8 +24,16 @@ from ego.config import AppPaths, EgoConfig, load_config
 from ego.decision import DecisionInput
 from ego.deliberation import NoParticipantsError
 from ego.events import WorkEventStream
-from ego.models import AvailabilityStatus, FinalDecision, InvestigationReport
+from ego.models import (
+    AvailabilityStatus,
+    FinalDecision,
+    ImplementationPlan,
+    InvestigationReport,
+    PlanFormat,
+    PlanState,
+)
 from ego.participants import Participant, build_participants
+from ego.planning import PlanArtifactWriter, PlanInput
 from ego.service import EgoServiceServer, ServiceRuntime, run_service_until_stopped
 from ego.service_auth import ServiceCredentialStore
 from ego.service_contract import service_contract_schema
@@ -56,8 +64,13 @@ decisions_app = typer.Typer(
     help="List and transition Ego Decision Records.", invoke_without_command=True
 )
 service_app = typer.Typer(help="Run and inspect the authenticated local Ego service.")
+plans_app = typer.Typer(
+    help="List and transition implementation plans.",
+    invoke_without_command=True,
+)
 app.add_typer(decisions_app, name="decisions")
 app.add_typer(service_app, name="service")
+app.add_typer(plans_app, name="plans")
 
 
 def version_callback(value: bool) -> None:
@@ -327,6 +340,8 @@ def render_final(final: FinalDecision, mode: TransparencyMode) -> None:
         "Disagreements": final.disagreements,
         "Assumptions": final.assumptions,
         "Risks": final.risks,
+        "Constraints": final.constraints,
+        "Non-goals": final.non_goals,
     }
     for heading, values in sections.items():
         if values:
@@ -380,6 +395,28 @@ def render_investigation(report: InvestigationReport) -> None:
             else:
                 typer.echo(f"- {value}")
     for warning in report.warnings:
+        typer.echo(f"WARNING: {warning}", err=True)
+
+
+def render_plan(plan: ImplementationPlan, run: dict[str, Any] | None = None) -> None:
+    typer.echo(f"Plan: {plan.plan_id}")
+    typer.echo(f"State: {plan.state.value}")
+    typer.echo(f"Format: {plan.format.value}")
+    typer.echo(f"Artifact: {plan.workspace / plan.artifact_path}")
+    typer.echo(f"Tasks: {len(plan.draft.tasks)}")
+    if plan.draft.open_questions:
+        typer.echo(f"Open questions: {len(plan.draft.open_questions)}")
+    if run is not None:
+        calls = run["calls"]
+        reported = [item for item in calls if item["total_tokens"] is not None]
+        if reported:
+            total_tokens = sum(int(item["total_tokens"]) for item in reported)
+            costs = [float(item["cost_usd"]) for item in reported if item["cost_usd"] is not None]
+            cost_text = f" · reported cost ${sum(costs):.4f}" if costs else ""
+            typer.echo(f"Provider usage: {total_tokens} tokens{cost_text}")
+        else:
+            typer.echo("Provider usage: unavailable from this participant")
+    for warning in plan.warnings:
         typer.echo(f"WARNING: {warning}", err=True)
 
 
@@ -507,6 +544,54 @@ def investigate(
     )
 
 
+@app.command()
+def plan(
+    decision_ids: Annotated[
+        list[str],
+        typer.Argument(help="One or more accepted Decision Record identifiers."),
+    ],
+    participant: Annotated[
+        str,
+        typer.Option("--participant", "-p", help="Single participant used for planning."),
+    ],
+    directory: Annotated[Path, typer.Option("--dir", help="Target workspace.")] = Path("."),
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Relative .ego/plans/<name> destination."),
+    ] = None,
+    format: Annotated[PlanFormat, typer.Option()] = PlanFormat.MARKDOWN,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create a portable implementation plan from accepted decisions."""
+    _, database, participants = services()
+    if participant not in participants:
+        raise typer.BadParameter(f"unknown participant: {participant}")
+    workspace = resolve_workspace(directory)
+    registry = build_agent_registry(database, participants)
+    request = PlanInput(
+        question="Create an implementation plan from the accepted decisions.",
+        workspace=workspace,
+        participant_ids=[participant],
+        command="plan",
+        decision_ids=decision_ids,
+        format=format,
+        destination=str(output) if output is not None else None,
+    )
+    try:
+        outcome = asyncio.run(registry.dispatch("plan", request))
+    except KeyError as error:
+        raise typer.BadParameter(f"unknown decision: {error.args[0]}") from error
+    except (NoParticipantsError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if json_output:
+        emit_json(outcome.plan)
+    else:
+        render_plan(outcome.plan, database.get_run(outcome.plan.run_id))
+        typer.echo(
+            f"Approve it with `ego plans approve {outcome.plan.plan_id}` before construction."
+        )
+
+
 async def available_participant_ids(participants: dict[str, Participant]) -> list[str]:
     availability = await asyncio.gather(*(item.probe() for item in participants.values()))
     return [
@@ -615,6 +700,8 @@ def inspect_run(
         render_final(FinalDecision.model_validate_json(row["final_json"]), mode)
     elif row["result_kind"] == "investigation_report" and row["result"]:
         render_investigation(InvestigationReport.model_validate(row["result"]))
+    elif row["result_kind"] == "implementation_plan" and row["result"]:
+        render_plan(ImplementationPlan.model_validate(row["result"]), row)
     else:
         emit_json(
             {
@@ -630,6 +717,81 @@ def inspect_run(
                 )
             }
         )
+
+
+@plans_app.callback()
+def list_plans(
+    ctx: typer.Context,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List plans when no transition subcommand is supplied."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _, database, _ = services()
+    rows = database.list_plans()
+    if json_output:
+        emit_json(rows)
+        return
+    for row in rows:
+        typer.echo(f"{row['id']}  {row['state']:<10} {row['question']}")
+
+
+def transition_plan(plan_id: str, state: PlanState, note: str | None) -> None:
+    _, database, _ = services()
+    try:
+        row = database.get_plan(plan_id)
+        if row["state"] != PlanState.DRAFT.value:
+            raise ValueError(f"plan is already {row['state']}")
+        plan_record = ImplementationPlan.model_validate(row["plan"])
+        manifest_sha256 = PlanArtifactWriter().update_state(
+            workspace=plan_record.workspace,
+            artifact_path=plan_record.artifact_path,
+            plan_id=plan_id,
+            state=state.value,
+        )
+        database.transition_plan(
+            plan_id,
+            state,
+            note,
+            manifest_sha256=manifest_sha256,
+        )
+    except KeyError as error:
+        raise typer.BadParameter(f"unknown plan: {plan_id}") from error
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"Plan {plan_id} is now {state.value}.")
+
+
+@plans_app.command("approve")
+def approve_plan(plan_id: str, note: Annotated[str | None, typer.Option()] = None) -> None:
+    transition_plan(plan_id, PlanState.APPROVED, note)
+
+
+@plans_app.command("reject")
+def reject_plan(plan_id: str, note: Annotated[str | None, typer.Option()] = None) -> None:
+    transition_plan(plan_id, PlanState.REJECTED, note)
+
+
+@plans_app.command("show")
+def show_plan(
+    plan_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    _, database, _ = services()
+    try:
+        row = database.get_plan(plan_id)
+    except KeyError as error:
+        raise typer.BadParameter(f"unknown plan: {plan_id}") from error
+    if json_output:
+        emit_json(row)
+        return
+    plan_record = ImplementationPlan.model_validate(row["plan"])
+    render_plan(plan_record, database.get_run(plan_record.run_id))
+    typer.echo(f"Current state: {row['state']}")
+    typer.echo("\nState history")
+    for event in row["events"]:
+        suffix = f" — {event['note']}" if event["note"] else ""
+        typer.echo(f"- {event['created_at']}: {event['state']}{suffix}")
 
 
 @decisions_app.callback()
@@ -662,6 +824,10 @@ def transition(decision_id: str, state: str, note: str | None) -> None:
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"Decision {decision_id} is now {state}.")
+    if state == "accepted":
+        typer.echo(
+            f"Create a plan later with `ego plan {decision_id} --participant <participant>`."
+        )
 
 
 @decisions_app.command("accept")
@@ -699,6 +865,7 @@ def choose_decision(
         f"Decision {decision_id} accepted alternative {alternative}:\n"
         f"{resolution['recommendation']}"
     )
+    typer.echo(f"Create a plan with `ego plan {decision_id} --participant <participant>`.")
 
 
 @decisions_app.command("decide")
@@ -719,6 +886,7 @@ def decide_decision(
         f"Decision {decision_id} accepted with human resolution:\n"
         f"{resolution['recommendation']}"
     )
+    typer.echo(f"Create a plan with `ego plan {decision_id} --participant <participant>`.")
 
 
 @app.command()

@@ -13,12 +13,14 @@ def test_help_exposes_public_commands() -> None:
     for command in (
         "ask",
         "investigate",
+        "plan",
         "summon",
         "doctor",
         "participants",
         "runs",
         "inspect",
         "decisions",
+        "plans",
         "service",
     ):
         assert command in result.stdout
@@ -48,5 +50,6 @@ def test_empty_history_commands_are_readable(monkeypatch: object, tmp_path: Path
     try:
         assert runner.invoke(app, ["runs"]).exit_code == 0
         assert runner.invoke(app, ["decisions"]).exit_code == 0
+        assert runner.invoke(app, ["plans"]).exit_code == 0
     finally:
         os.environ.pop("EGO_DATA_DIR", None)

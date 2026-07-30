@@ -147,7 +147,11 @@ async def test_registry_discovers_and_dispatches_specialized_agents(
     }
     registry = build_agent_registry(database, participants)
 
-    assert [agent.agent_id for agent in registry.list()] == ["decision", "investigate"]
+    assert [agent.agent_id for agent in registry.list()] == [
+        "decision",
+        "investigate",
+        "plan",
+    ]
     assert registry.get("investigate").workflow_id == "investigation"
 
     outcome = await registry.dispatch(

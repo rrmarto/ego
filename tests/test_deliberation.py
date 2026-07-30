@@ -60,6 +60,8 @@ class FakeParticipant:
                 ],
                 confidence=Confidence.HIGH,
                 confidence_reason="Direct project evidence.",
+                constraints=["Keep participant execution read-only."],
+                non_goals=["Do not implement the recommendation."],
                 changed_position=False,
                 change_reason="The peer evidence supports the initial position.",
             )
@@ -78,6 +80,8 @@ class FakeParticipant:
                 supporting_argument_ids=["boundary"],
                 confidence=Confidence.HIGH,
                 confidence_reason="Peers independently used the same source.",
+                constraints=["Keep participant execution read-only."],
+                non_goals=["Do not implement the recommendation."],
                 evidence=[citation],
                 equivalent_to_peer=self.equivalent
                 if request.phase is Phase.RECONCILIATION
@@ -108,6 +112,8 @@ async def test_four_participant_deliberation_completes(database: Database, tmp_p
     )
 
     assert outcome.final.status is RunStatus.COMPLETED
+    assert outcome.final.constraints == ["Keep participant execution read-only."]
+    assert outcome.final.non_goals == ["Do not implement the recommendation."]
     assert outcome.final.confidence is Confidence.MODERATE
     assert "caps model-only confidence" in outcome.final.confidence_reason
     assert "semantic claims" in outcome.final.verification_scope

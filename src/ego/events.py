@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ego.models import InvestigationPhase, JsonObject, Phase, WorkStage
+from ego.models import InvestigationPhase, JsonObject, Phase, PlanPhase, WorkStage
 
 
 class WorkEventType(StrEnum):
@@ -20,6 +20,8 @@ class WorkEventType(StrEnum):
     PARTICIPANT_TURN_FAILED = "participant_turn_failed"
     PHASE_COMPLETED = "phase_completed"
     DECISION_CREATED = "decision_created"
+    PLAN_CREATED = "plan_created"
+    PLAN_STATE_CHANGED = "plan_state_changed"
     RESULT_CREATED = "result_created"
 
 
@@ -42,7 +44,9 @@ class WorkEvent(BaseModel):
         if self.stage is None and self.phase is not None:
             object.__setattr__(self, "stage", self.phase.value)
         elif self.phase is None and self.stage is not None:
-            if self.agent_id == "investigate":
+            if self.agent_id == "plan":
+                object.__setattr__(self, "phase", PlanPhase(self.stage))
+            elif self.agent_id == "investigate":
                 object.__setattr__(self, "phase", InvestigationPhase(self.stage))
             else:
                 object.__setattr__(self, "phase", Phase(self.stage))

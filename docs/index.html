@@ -82,9 +82,9 @@
         </div>
 
         <div class="system-facts" aria-label="Key architecture facts">
-          <div><strong>2</strong><span>specialized workflows</span></div>
+          <div><strong>3</strong><span>specialized workflows</span></div>
           <div><strong>5</strong><span>participant adapters</span></div>
-          <div><strong>RO</strong><span>real workspace boundary</span></div>
+          <div><strong>RO+</strong><span>bounded Plan artifacts</span></div>
           <div><strong>TCP</strong><span>authenticated loopback service</span></div>
         </div>
       </section>
@@ -158,7 +158,7 @@
                   <article class="architecture-node accent-yellow">
                     <span class="node-kicker">EXPLICIT DISPATCH</span>
                     <h3>AgentRegistry</h3>
-                    <p>Maps explicit agent identifiers to Decision or Investigation. No automatic router exists.</p>
+                    <p>Maps explicit agent identifiers to Decision, Investigation, or Plan. No automatic router exists.</p>
                     <code>agents/registry.py</code>
                   </article>
                   <article class="architecture-node accent-purple">
@@ -391,14 +391,14 @@ client = HMAC(
 
       <section id="runtime" class="section-shell section-block">
         <div class="section-heading">
-          <div><p class="eyebrow">03 / WORKFLOW RUNTIME</p><h2>One runtime, two explicit agents</h2></div>
+          <div><p class="eyebrow">03 / WORKFLOW RUNTIME</p><h2>One runtime, three explicit agents</h2></div>
           <p>
-            Decision and Investigation use different stage contracts and result semantics while
+            Decision, Investigation, and Plan use different contracts and result semantics while
             sharing participant discovery, Seatbelt enforcement, events, persistence, and failure handling.
           </p>
         </div>
         <ol class="runtime-flow">
-          <li><span class="flow-number">00</span><div><strong>Explicit request</strong><p>The interface selects Decision or Investigation; automatic routing remains deferred.</p></div></li>
+          <li><span class="flow-number">00</span><div><strong>Explicit request</strong><p>The interface selects Decision, Investigation, or Plan; automatic routing remains deferred.</p></div></li>
           <li><span class="flow-number">01</span><div><strong>Run creation</strong><p>Ego resolves the workspace, records initial Git state, and persists the run.</p></div></li>
           <li><span class="flow-number">02</span><div><strong>Fail-closed probes</strong><p>Binary, version, required controls, authentication, and Seatbelt are checked.</p></div></li>
           <li><span class="flow-number">03</span><div><strong>Stage barriers</strong><p>Available participants run in parallel inside each workflow stage.</p></div></li>
@@ -597,6 +597,7 @@ client = HMAC(
             <article class="schema-table"><h3>events</h3><p>agent · workflow · stage · participant · payload</p></article>
             <article class="schema-table table-decision"><h3>decisions</h3><p>derived state · FinalDecision · supersedes</p></article>
             <article class="schema-table"><h3>decision_resolutions</h3><p>alternative or human conclusion · note</p></article>
+            <article class="schema-table"><h3>plans</h3><p>accepted decisions · artifact · lifecycle · hashes</p></article>
           </div>
           <div class="tui-observer">
             <p class="node-kicker">WHAT INTERFACES PROJECT</p>
@@ -648,6 +649,7 @@ client = HMAC(
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0010-authenticated-loopback-service.md">0010 · authenticated loopback service</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0011-ego-owned-launchagent.md">0011 · Ego-owned LaunchAgent</a></li>
             <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0012-authenticated-workflow-execution.md">0012 · authenticated workflow execution</a></li>
+            <li><a href="https://github.com/rrmarto/ego/blob/main/docs/decisions/0013-accepted-decisions-to-markdown-plans.md">0013 · bounded Markdown plans</a></li>
           </ol>
         </div>
       </section>
@@ -657,7 +659,7 @@ client = HMAC(
         <h2 id="principles-title">Version 1 invariants</h2>
         <div class="principle-grid">
           <article><span>01</span><p>Ego recommends; it never implements.</p></article>
-          <article><span>02</span><p>The real workspace remains read-only.</p></article>
+          <article><span>02</span><p>Participants are read-only; Plan writes only below .ego/plans/.</p></article>
           <article><span>03</span><p>Every participant must pass Seatbelt.</p></article>
           <article><span>04</span><p>No hidden roles or permanent synthesizer.</p></article>
           <article><span>05</span><p>Material disagreement remains visible.</p></article>

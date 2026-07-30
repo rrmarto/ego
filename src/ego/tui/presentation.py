@@ -4,10 +4,11 @@ from collections.abc import Mapping
 
 from rich.text import Text
 
-from ego.models import FinalDecision, InvestigationPhase, InvestigationReport
+from ego.models import FinalDecision, InvestigationPhase, InvestigationReport, PlanPhase
 from ego.tui.state import (
     INVESTIGATION_PHASE_LABELS,
     PHASE_LABELS,
+    PLAN_PHASE_LABELS,
     ParticipantState,
     SessionState,
 )
@@ -108,11 +109,12 @@ def protocol_text(session: SessionState, *, running: bool) -> Text:
         else:
             marker, color = "○", "bright_black"
         protocol.append(f"{marker} ", style=f"bold {color}")
-        label = (
-            INVESTIGATION_PHASE_LABELS[phase]
-            if isinstance(phase, InvestigationPhase)
-            else PHASE_LABELS[phase]
-        )
+        if isinstance(phase, PlanPhase):
+            label = PLAN_PHASE_LABELS[phase]
+        elif isinstance(phase, InvestigationPhase):
+            label = INVESTIGATION_PHASE_LABELS[phase]
+        else:
+            label = PHASE_LABELS[phase]
         protocol.append(f"{label}\n", style=color)
     return protocol
 
@@ -138,6 +140,8 @@ def final_markdown(final: FinalDecision, decision_id: str, *, mode: str) -> str:
             ("Disagreements", final.disagreements),
             ("Assumptions", final.assumptions),
             ("Risks", final.risks),
+            ("Constraints", final.constraints),
+            ("Non-goals", final.non_goals),
         ):
             if values:
                 sections.extend((f"### {heading}", *(f"- {value}" for value in values)))

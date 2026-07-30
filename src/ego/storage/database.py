@@ -7,26 +7,30 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from ego.config import AppPaths
 from ego.events import WorkEvent, WorkEventStream, WorkEventType
 from ego.models import (
+    AcceptedDecisionPackage,
     DecisionState,
     FinalDecision,
+    ImplementationPlan,
     InvestigationPhase,
     JsonObject,
     ParticipantAvailability,
     ParticipantTurnResult,
     Phase,
+    PlanPhase,
+    PlanState,
     RunStatus,
     WorkStage,
 )
 from ego.redaction import redact_sensitive_text
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -34,6 +38,8 @@ def utc_now() -> str:
 
 
 def _work_stage(value: str, agent_id: str = "decision") -> WorkStage:
+    if agent_id == "plan":
+        return PlanPhase(value)
     if agent_id == "investigate":
         return InvestigationPhase(value)
     try:
@@ -224,6 +230,41 @@ class Database:
                     stage = COALESCE(stage, json_extract(payload_json, '$.phase'))"""
                 )
                 connection.execute("PRAGMA user_version = 4")
+                version = 4
+            if version < 5:
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS plans (
+                        id TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+                        state TEXT NOT NULL,
+                        format TEXT NOT NULL,
+                        artifact_path TEXT NOT NULL,
+                        manifest_sha256 TEXT NOT NULL,
+                        plan_sha256 TEXT NOT NULL,
+                        plan_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS plan_decisions (
+                        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+                        decision_id TEXT NOT NULL REFERENCES decisions(id),
+                        ordinal INTEGER NOT NULL,
+                        PRIMARY KEY (plan_id, decision_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS plan_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+                        state TEXT NOT NULL,
+                        note TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS plan_decisions_decision_id_idx
+                    ON plan_decisions(decision_id, plan_id);
+                    PRAGMA user_version = 5;
+                    """
+                )
+                version = 5
 
     @staticmethod
     def _add_column(
@@ -802,6 +843,191 @@ class Database:
         result["record"] = json.loads(result.pop("record_json"))
         result["events"] = [dict(row) for row in events]
         result["resolutions"] = [dict(row) for row in resolutions]
+        return result
+
+    def get_accepted_decision_package(
+        self,
+        decision_id: str,
+        *,
+        workspace: Path,
+    ) -> AcceptedDecisionPackage:
+        with self.connect() as connection:
+            decision = connection.execute(
+                """SELECT d.state, d.record_json, r.question, r.workspace
+                FROM decisions d JOIN runs r ON r.id = d.run_id
+                WHERE d.id = ?""",
+                (decision_id,),
+            ).fetchone()
+            if decision is None:
+                raise KeyError(decision_id)
+            if decision["state"] != "accepted":
+                raise ValueError(f"decision {decision_id} is not accepted")
+            if Path(decision["workspace"]) != workspace:
+                raise ValueError(f"decision {decision_id} belongs to a different workspace")
+            accepted_event = connection.execute(
+                """SELECT note, created_at FROM decision_events
+                WHERE decision_id = ? AND state = 'accepted'
+                ORDER BY id DESC LIMIT 1""",
+                (decision_id,),
+            ).fetchone()
+            resolution = connection.execute(
+                """SELECT resolution_type, recommendation, note
+                FROM decision_resolutions WHERE decision_id = ?
+                ORDER BY id DESC LIMIT 1""",
+                (decision_id,),
+            ).fetchone()
+        if accepted_event is None:
+            raise ValueError(f"decision {decision_id} has no accepted event")
+        record = FinalDecision.model_validate_json(decision["record_json"])
+        conclusion_source: Literal["recommendation", "alternative", "custom"]
+        if resolution is None:
+            conclusion = record.recommendation
+            conclusion_source = "recommendation"
+            human_note = accepted_event["note"]
+        else:
+            conclusion = resolution["recommendation"]
+            if resolution["resolution_type"] == "alternative":
+                conclusion_source = "alternative"
+            elif resolution["resolution_type"] == "custom":
+                conclusion_source = "custom"
+            else:
+                raise ValueError(f"decision {decision_id} has an invalid resolution type")
+            human_note = resolution["note"]
+        return AcceptedDecisionPackage(
+            decision_id=decision_id,
+            question=decision["question"],
+            workspace=workspace,
+            conclusion=conclusion,
+            conclusion_source=conclusion_source,
+            rationale=record.supporting_arguments,
+            constraints=record.constraints,
+            non_goals=record.non_goals,
+            alternatives=record.alternatives,
+            disagreements=record.disagreements,
+            assumptions=record.assumptions,
+            risks=record.risks,
+            evidence=record.evidence,
+            human_note=human_note,
+            accepted_at=accepted_event["created_at"],
+        )
+
+    def create_plan(self, plan: ImplementationPlan) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO plans
+                (id, run_id, state, format, artifact_path, manifest_sha256,
+                 plan_sha256, plan_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    plan.plan_id,
+                    plan.run_id,
+                    plan.state.value,
+                    plan.format.value,
+                    str(plan.artifact_path),
+                    plan.manifest_sha256,
+                    plan.plan_sha256,
+                    plan.model_dump_json(),
+                    now,
+                    now,
+                ),
+            )
+            connection.executemany(
+                """INSERT INTO plan_decisions (plan_id, decision_id, ordinal)
+                VALUES (?, ?, ?)""",
+                [
+                    (plan.plan_id, decision_id, ordinal)
+                    for ordinal, decision_id in enumerate(plan.decision_ids)
+                ],
+            )
+            connection.execute(
+                """INSERT INTO plan_events (plan_id, state, note, created_at)
+                VALUES (?, ?, NULL, ?)""",
+                (plan.plan_id, plan.state.value, now),
+            )
+            event = self._event(
+                connection,
+                plan.run_id,
+                WorkEventType.PLAN_CREATED,
+                {
+                    "plan_id": plan.plan_id,
+                    "state": plan.state.value,
+                    "format": plan.format.value,
+                    "artifact_path": str(plan.artifact_path),
+                },
+            )
+        self._publish(event)
+
+    def transition_plan(
+        self,
+        plan_id: str,
+        state: PlanState,
+        note: str | None,
+        *,
+        manifest_sha256: str,
+    ) -> None:
+        if state not in {PlanState.APPROVED, PlanState.REJECTED, PlanState.SUPERSEDED}:
+            raise ValueError(f"unsupported plan transition: {state.value}")
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT run_id, state FROM plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError(plan_id)
+            if current["state"] != PlanState.DRAFT.value:
+                raise ValueError(f"plan is already {current['state']}")
+            now = utc_now()
+            connection.execute(
+                """UPDATE plans SET state = ?, manifest_sha256 = ?, updated_at = ?
+                WHERE id = ?""",
+                (state.value, manifest_sha256, now, plan_id),
+            )
+            connection.execute(
+                """INSERT INTO plan_events (plan_id, state, note, created_at)
+                VALUES (?, ?, ?, ?)""",
+                (plan_id, state.value, note, now),
+            )
+            event = self._event(
+                connection,
+                current["run_id"],
+                WorkEventType.PLAN_STATE_CHANGED,
+                {"plan_id": plan_id, "state": state.value, "note": note},
+            )
+        self._publish(event)
+
+    def list_plans(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT p.id, p.run_id, p.state, p.format, p.artifact_path,
+                p.created_at, r.question
+                FROM plans p JOIN runs r ON r.id = p.run_id
+                ORDER BY p.created_at DESC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_plan(self, plan_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            plan = connection.execute(
+                "SELECT * FROM plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            if plan is None:
+                raise KeyError(plan_id)
+            decisions = connection.execute(
+                """SELECT decision_id FROM plan_decisions
+                WHERE plan_id = ? ORDER BY ordinal""",
+                (plan_id,),
+            ).fetchall()
+            events = connection.execute(
+                """SELECT state, note, created_at FROM plan_events
+                WHERE plan_id = ? ORDER BY id""",
+                (plan_id,),
+            ).fetchall()
+        result = dict(plan)
+        result["plan"] = json.loads(result.pop("plan_json"))
+        result["decision_ids"] = [row["decision_id"] for row in decisions]
+        result["events"] = [dict(row) for row in events]
         return result
 
     def cleanup_raw(self, retention_days: int) -> int:

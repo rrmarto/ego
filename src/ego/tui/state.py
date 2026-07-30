@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ego.events import DeliberationEvent, DeliberationEventType
-from ego.models import InvestigationPhase, Phase, WorkStage
+from ego.models import InvestigationPhase, Phase, PlanPhase, WorkStage
 
 PHASES: tuple[WorkStage, ...] = (
     Phase.INDEPENDENT,
@@ -34,6 +34,8 @@ INVESTIGATION_PHASE_LABELS = {
     InvestigationPhase.SYNTHESIS: "Cross synthesis",
     InvestigationPhase.RECONCILIATION: "Reconciliation",
 }
+PLAN_PHASES: tuple[WorkStage, ...] = (PlanPhase.DRAFT,)
+PLAN_PHASE_LABELS = {PlanPhase.DRAFT: "Implementation plan"}
 
 
 @dataclass
@@ -58,12 +60,16 @@ class SessionState:
 
     @property
     def phase_label(self) -> str:
+        if isinstance(self.phase, PlanPhase):
+            return PLAN_PHASE_LABELS[self.phase]
         if isinstance(self.phase, InvestigationPhase):
             return INVESTIGATION_PHASE_LABELS[self.phase]
         return PHASE_LABELS[self.phase] if self.phase else "Ready"
 
     @property
     def phases(self) -> tuple[WorkStage, ...]:
+        if self.agent_id == "plan":
+            return PLAN_PHASES
         return INVESTIGATION_PHASES if self.agent_id == "investigate" else PHASES
 
     def reset(self, participant_ids: list[str]) -> None:

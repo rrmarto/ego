@@ -42,7 +42,11 @@ class InvestigationPhase(StrEnum):
     RECONCILIATION = "reconciliation"
 
 
-WorkStage = Phase | InvestigationPhase
+class PlanPhase(StrEnum):
+    DRAFT = "plan_draft"
+
+
+WorkStage = Phase | InvestigationPhase | PlanPhase
 
 
 class Confidence(StrEnum):
@@ -124,6 +128,8 @@ class Position(BaseModel):
     disagreements: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
     confidence: Confidence
     confidence_reason: str
     changed_position: bool = False
@@ -149,6 +155,8 @@ class Synthesis(BaseModel):
     disagreements: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
     confidence: Confidence
     confidence_reason: str
     evidence: list[Evidence] = Field(default_factory=list)
@@ -165,6 +173,8 @@ class FinalDecision(BaseModel):
     disagreements: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
     confidence: Confidence
     confidence_reason: str
     evidence: list[Evidence] = Field(default_factory=list)
@@ -245,6 +255,76 @@ class InvestigationReport(BaseModel):
     syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
 
 
+class AcceptedDecisionPackage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    decision_id: str
+    question: str
+    workspace: Path
+    conclusion: str
+    conclusion_source: Literal["recommendation", "alternative", "custom"]
+    rationale: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list)
+    disagreements: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
+    human_note: str | None = None
+    accepted_at: str
+
+
+class PlanTask(BaseModel):
+    id: str
+    title: str
+    description: str
+    affected_paths: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+
+
+class PlanDraft(BaseModel):
+    title: str
+    objective: str
+    scope: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
+    affected_areas: list[str] = Field(default_factory=list)
+    tasks: list[PlanTask] = Field(default_factory=list)
+    validation: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class PlanState(StrEnum):
+    DRAFT = "draft"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+class PlanFormat(StrEnum):
+    MARKDOWN = "markdown"
+
+
+class ImplementationPlan(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    plan_id: str
+    run_id: str
+    state: PlanState
+    format: PlanFormat
+    workspace: Path
+    decision_ids: list[str]
+    artifact_path: Path
+    workspace_git_head: str | None = None
+    manifest_sha256: str
+    plan_sha256: str
+    draft: PlanDraft
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TurnRequest(BaseModel):
     run_id: str
     phase: WorkStage
@@ -262,6 +342,7 @@ class TurnRequest(BaseModel):
     peer_investigations: dict[str, InvestigationDraft] = Field(default_factory=dict)
     investigation_reviews: dict[str, list[InvestigationReview]] = Field(default_factory=dict)
     investigation_syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
+    accepted_decisions: list[AcceptedDecisionPackage] = Field(default_factory=list)
 
 
 class UsageMetrics(BaseModel):
@@ -282,6 +363,7 @@ class ParticipantTurnResult(BaseModel):
         | InvestigationDraft
         | InvestigationReviewBundle
         | InvestigationSynthesis
+        | PlanDraft
     )
     raw_output: str
     duration_seconds: float

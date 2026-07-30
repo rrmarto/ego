@@ -21,7 +21,9 @@ Ego v0.1.0:
 - reads the real workspace under a mandatory macOS Seatbelt boundary;
 - runs a five-phase deliberation protocol instead of selecting a result by vote;
 - validates cited paths, line ranges, and file fragments against the workspace;
-- persists runs, normalized model responses, decisions, and human resolutions;
+- persists runs, normalized model responses, decisions, plans, and human resolutions;
+- creates one-call Markdown implementation plans from accepted decisions under
+  the bounded `.ego/plans/` artifact path;
 - reports provider usage when a CLI exposes token or cost information;
 - exposes authenticated diagnostics, workflow streams, recovery, and human Decision
   actions on IPv4 loopback for sandboxed clients;
@@ -127,6 +129,11 @@ ego investigate "Why does OpenCode fail?" --dir .
 ego investigate "Why does OpenCode fail?" --dir . \
   --participant codex --participant opencode
 ego investigate "Why does OpenCode fail?" --dir . --json
+
+# Create a portable Markdown plan from accepted decisions using one participant
+ego plan <decision-id> --participant codex --dir .
+ego plans
+ego plans approve <plan-id>
 
 # Diagnose adapters, CLI versions, authentication, and sandbox support
 ego doctor
@@ -323,12 +330,27 @@ ego decisions reject <decision-id> --note "Risk is not acceptable"
 These actions append a new event. They do not rewrite the original model result,
 disagreements, or evidence.
 
+An accepted Decision Record can produce a portable plan without repeating the
+five-stage deliberation:
+
+```bash
+ego plan <decision-id> --participant codex --dir .
+ego plans approve <plan-id>
+```
+
+Plan resolves the accepted Decision Records in Ego, makes one normal provider
+call, and writes `plan.md`, `decisions.json`, and `manifest.json` below
+`.ego/plans/`. The participant remains read-only; a deterministic writer owns
+that narrow artifact path. Approval records readiness for an external Builder
+but never implements the plan.
+
 ## Architecture
 
 The TUI and command-line interface depend on the same application services.
-`DecisionAgent` and `InvestigateAgent` select reproducible workflows through an
-explicit registry and share an `AgentRuntime`. The runtime works through the
-`Participant` contract, so provider flags,
+`DecisionAgent`, `InvestigateAgent`, and `PlanAgent` select reproducible
+workflows through an explicit registry and share an `AgentRuntime`. Plan uses
+one explicitly selected participant to bound token use. The runtime works
+through the `Participant` contract, so provider flags,
 authentication checks, and output parsing remain inside their adapters.
 
 ```mermaid
