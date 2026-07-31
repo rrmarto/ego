@@ -5,8 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from ego.models import HumanPlanBrief
+from ego.models import HumanPlanBrief, PlanDraft, PlanTask
 from ego.planning.context import WorkspaceContextBuilder
+from ego.planning.context_enrichment import (
+    MAX_ENRICHMENT_BYTES,
+    stale_workspace_evidence_ids,
+)
 
 
 def _source(instruction: str) -> HumanPlanBrief:
@@ -201,3 +205,114 @@ async def test_workspace_context_requires_query_anchor_coverage(tmp_path: Path) 
     assert not context.manifest.sufficient
     assert context.manifest.fallback_reason is not None
     assert "query anchors" in context.manifest.fallback_reason
+
+
+@pytest.mark.asyncio
+async def test_workspace_context_adaptively_recovers_distant_symbols_and_consumers(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src" / "ego"
+    source.mkdir(parents=True)
+    filler_before = "\n".join(f"before_{index} = {index}" for index in range(210))
+    filler_between = "\n".join(f"between_{index} = {index}" for index in range(170))
+    (source / "models.py").write_text(
+        f"{filler_before}\n"
+        "class WorkspaceContextManifest:\n"
+        "    context_id: str\n"
+        f"{filler_between}\n"
+        "class ImplementationPlan:\n"
+        "    workspace_context_manifest: WorkspaceContextManifest | None = None\n",
+        encoding="utf-8",
+    )
+    (source / "cli.py").write_text(
+        "def inspect_run(run_id: str):\n"
+        "    return run_id\n",
+        encoding="utf-8",
+    )
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_plan_compat.py").write_text(
+        "def test_legacy_implementation_plan():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    await _track_workspace(tmp_path)
+    builder = WorkspaceContextBuilder()
+    initial = await builder.build(
+        workspace=tmp_path,
+        question="Expose WorkspaceContextManifest in ego inspect.",
+        sources=[_source("Show the safe WorkspaceContext summary.")],
+        git_head=None,
+        git_status=None,
+    )
+
+    assert "WorkspaceContextManifest" in next(
+        item.content for item in initial.evidence if item.path == "src/ego/models.py"
+    )
+    assert all("ImplementationPlan" not in item.content for item in initial.evidence)
+
+    enriched = await builder.enrich(
+        workspace=tmp_path,
+        context=initial,
+        candidates={
+            "codex": PlanDraft(
+                title="Expose WorkspaceContextManifest",
+                objective="Read it from ImplementationPlan.",
+                affected_areas=["src/ego/models.py"],
+                open_questions=[
+                    "Does ImplementationPlan persist workspace_context_manifest?"
+                ],
+                tasks=[
+                    PlanTask(
+                        id="compat",
+                        title="Preserve ImplementationPlan compatibility",
+                        description="Use workspace_context_manifest when present.",
+                        affected_paths=["src/ego/models.py"],
+                        acceptance_criteria=[
+                            "test_legacy_implementation_plan covers old records."
+                        ],
+                    )
+                ],
+            )
+        },
+    )
+
+    adaptive = [
+        item
+        for item in enriched.evidence
+        if item.id in enriched.manifest.enrichment_evidence_ids
+    ]
+    assert enriched.manifest.initial_context_id == initial.manifest.context_id
+    assert enriched.manifest.context_id != initial.manifest.context_id
+    assert any(
+        item.path == "src/ego/models.py" and "ImplementationPlan" in item.content
+        for item in adaptive
+    )
+    assert any(
+        item.path == "tests/test_plan_compat.py"
+        and "test_legacy_implementation_plan" in item.content
+        for item in adaptive
+    )
+    assert (
+        enriched.manifest.bytes_used - initial.manifest.bytes_used
+        <= MAX_ENRICHMENT_BYTES
+    )
+    assert (
+        enriched.manifest.enrichment_bytes_used
+        <= enriched.manifest.enrichment_byte_budget
+    )
+    assert enriched.manifest.bytes_used <= enriched.manifest.byte_budget
+
+    models_reference_ids = [
+        item.id
+        for item in enriched.manifest.evidence
+        if item.path == "src/ego/models.py"
+    ]
+    (source / "models.py").write_text(
+        "# changed after collaborative context was frozen\n",
+        encoding="utf-8",
+    )
+
+    stale_ids = await stale_workspace_evidence_ids(tmp_path, enriched.manifest)
+
+    assert set(models_reference_ids).issubset(stale_ids)

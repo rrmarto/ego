@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from ego.models import (
+    PlanDraft,
     PlanSource,
     WorkspaceContext,
     WorkspaceContextEvidence,
@@ -328,6 +329,23 @@ class WorkspaceContextBuilder:
             manifest=manifest,
             project_map=project_map,
             evidence=evidence,
+        )
+
+    async def enrich(
+        self,
+        *,
+        workspace: Path,
+        context: WorkspaceContext,
+        candidates: dict[str, PlanDraft],
+    ) -> WorkspaceContext:
+        """Add bounded evidence for technical signals discovered by plan authors."""
+        from ego.planning.context_enrichment import enrich_workspace_context
+
+        return await enrich_workspace_context(
+            workspace=workspace,
+            context=context,
+            candidates=candidates,
+            byte_budget=self.byte_budget,
         )
 
 
@@ -667,6 +685,21 @@ def _best_fragment(
     terms: list[str],
     anchors: set[str],
 ) -> tuple[int, int]:
+    return _ranked_fragment_bounds(
+        lines,
+        terms,
+        anchors,
+        max_lines=MAX_FRAGMENT_LINES,
+    )[0]
+
+
+def _ranked_fragment_bounds(
+    lines: list[str],
+    terms: list[str],
+    anchors: set[str],
+    *,
+    max_lines: int,
+) -> list[tuple[int, int]]:
     folded = [line.casefold() for line in lines]
     matching = [
         index
@@ -674,13 +707,12 @@ def _best_fragment(
         if any(term in line for term in terms)
     ]
     if not matching:
-        return 0, min(len(lines), MAX_FRAGMENT_LINES)
-    best: tuple[int, int, int, int] | None = None
-    best_bounds = (0, min(len(lines), MAX_FRAGMENT_LINES))
+        return [(0, min(len(lines), max_lines))]
+    ranked: list[tuple[tuple[int, int, int, int], tuple[int, int]]] = []
     for center in matching:
-        start = max(0, center - MAX_FRAGMENT_LINES // 3)
-        end = min(len(lines), start + MAX_FRAGMENT_LINES)
-        start = max(0, end - MAX_FRAGMENT_LINES)
+        start = max(0, center - max_lines // 3)
+        end = min(len(lines), start + max_lines)
+        start = max(0, end - max_lines)
         window = "\n".join(folded[start:end])
         covered = {term for term in terms if term in window}
         definition_hits = sum(
@@ -701,10 +733,17 @@ def _best_fragment(
             + min(occurrences, 20)
         )
         candidate = (score, definition_hits, len(covered & anchors), -start)
-        if best is None or candidate > best:
-            best = candidate
-            best_bounds = (start, end)
-    return best_bounds
+        ranked.append((candidate, (start, end)))
+    return list(
+        dict.fromkeys(
+            bounds
+            for _, bounds in sorted(
+                ranked,
+                key=lambda item: item[0],
+                reverse=True,
+            )
+        )
+    )
 
 
 def _read_text(workspace: Path, path: Path) -> str | None:

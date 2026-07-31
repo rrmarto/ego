@@ -235,7 +235,7 @@ async def test_plan_collaborates_without_final_assembly_when_audits_are_clear(
     sources = json.loads((artifact / "sources.json").read_text(encoding="utf-8"))
     assert sources[0]["conclusion"] == "Create bounded Markdown plan artifacts."
     manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["artifact_version"] == 4
+    assert manifest["artifact_version"] == 5
     assert manifest["participants"] == sorted(participants)
     assert manifest["blocking_issues"] == []
     assert manifest["workspace_context"]["context_id"]
@@ -322,6 +322,17 @@ async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
         "def export_csv(records):\n    return records\n",
         encoding="utf-8",
     )
+    for index in range(15):
+        (source_dir / f"a{index:02d}.py").write_text(
+            f"unrelated_{index} = True\n",
+            encoding="utf-8",
+        )
+    artifacts = source_dir / "ego" / "planning" / "artifacts.py"
+    artifacts.parent.mkdir(parents=True)
+    artifacts.write_text(
+        "class PlanArtifactWriter:\n    pass\n",
+        encoding="utf-8",
+    )
     participants = plan_participants("codex", "claude")
 
     outcome = await PlanWorkflow(database, participants).plan(
@@ -356,9 +367,12 @@ async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
         if request.phase is PlanPhase.JOINT_DRAFT
     )
     assert joint.workspace_context is not None
-    assert joint.workspace_context.manifest.context_id in context_ids
+    assert joint.workspace_context.manifest.initial_context_id in context_ids
+    assert joint.workspace_context.manifest.context_id not in context_ids
+    assert joint.workspace_context.manifest.enrichment_evidence_ids
     assert "def export_csv" in build_prompt(independent[0])
     assert "def export_csv" not in build_prompt(joint)
+    assert "class PlanArtifactWriter" in build_prompt(joint)
     assert outcome.plan.workspace_context_manifest is not None
     stored = database.get_plan(outcome.plan.plan_id)["plan"]
     assert (

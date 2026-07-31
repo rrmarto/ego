@@ -217,12 +217,22 @@ project instructions, a compact path map, and query-relevant evidence
 fragments. Explicit instruction files remain mandatory; referenced directories
 contribute only a small relevance-ranked sample. Identifier-like query anchors
 and whole-window scoring prevent weak early matches from hiding the requested
-symbols. Every participant receives that same snapshot. Each participant first
-creates an independent plan; a rotating author then creates one joint candidate
-from the normalized plans with no tools. Every original author audits that
-candidate in parallel against its own plan and the frozen sources. If any audit
-contains criticism, a different rotating participant performs one final
-assembly.
+symbols. Every participant receives that same initial snapshot and creates an
+independent plan.
+
+Before joint drafting, Ego performs one deterministic adaptive evidence pass
+over normalized plan signals. Existing affected paths and technical identifiers
+from tasks, risks, validation, and open questions recover a small number of
+additional non-overlapping fragments. This covers distant symbols in the same
+file plus definitions, callers, tests, configuration, and persisted contracts
+in related files. The pass uses the existing safe catalog and exclusions, has
+separate anchor/file/fragment limits and a byte allowance that shrinks with the
+participant count to bound aggregate later-stage prompts. It makes no provider
+call, grants no tools, and writes nothing. A rotating author then creates one joint candidate
+from the normalized plans and adaptive evidence. Every original author audits
+that candidate in parallel against its own plan, frozen sources, and the same
+adaptive evidence. If any audit contains criticism, a different rotating
+participant performs one final assembly.
 
 The joint candidate maps every qualified source task to an incorporated,
 merged, omitted, variant, or unmapped disposition. Audits and final dispositions
@@ -237,15 +247,20 @@ and any joint variants they resolve. A variant omitted without an explicit
 resolution remains blocking. This lets global criticisms be applied without
 fake task targets while preserving every untouched section.
 
-The full `WorkspaceContext` is sent only to independent planning. Later stages
-receive its manifest and project map with compact structured sources and prior
-planning records. When the snapshot is sufficient, every provider call has
-tools disabled. If mandatory instructions, the catalog, or relevant evidence
-cannot fit deterministic bounds, identifier-like query anchors are not
-sufficiently covered, or context construction fails, only independent planning
-retains protected local read/search as a fallback. Each invalid structured
-response retains one corrective call; that correction receives only the prior
-response and validation error rather than repeating the full context.
+The full initial `WorkspaceContext` is sent only to independent planning.
+Later stages receive its manifest and project map, adaptive evidence contents,
+compact structured sources, and prior planning records. The final manifest
+links its initial context identifier to adaptive evidence identifiers and
+records adaptive truncation without persisting contents. Ego revalidates every
+referenced file hash after collaboration; drift is recorded and blocks approval
+instead of silently mixing snapshots. When the initial snapshot is sufficient,
+every provider call has tools disabled. If mandatory
+instructions, the catalog, or relevant evidence cannot fit deterministic
+bounds, identifier-like query anchors are not sufficiently covered, or context
+construction fails, only independent planning retains protected local
+read/search as a fallback. Each invalid structured response retains one
+corrective call; that correction receives only the prior response and
+validation error rather than repeating context.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`

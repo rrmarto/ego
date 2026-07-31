@@ -479,6 +479,7 @@ def _build_plan_prompt(
             context["workspace_context"] = _workspace_context_payload(
                 request,
                 include_content=phase is PlanPhase.INDEPENDENT,
+                include_enrichment_content=phase is not PlanPhase.INDEPENDENT,
             )
         if phase is PlanPhase.JOINT_DRAFT:
             context["candidate_plans"] = _candidate_plans(request.plan_candidates)
@@ -545,7 +546,9 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "Create one joint candidate from every independent plan. Merge compatible work, "
             "order dependencies, and retain unique useful work. For every source task use the "
             "exact qualified id shown in candidate_plans and provide one coverage disposition. "
-            "Never omit a task silently; incompatible approaches become variants."
+            "Never omit a task silently; incompatible approaches become variants. Use supplied "
+            "adaptive evidence to resolve factual workspace gaps discovered by the authors; do "
+            "not preserve a technical question when that evidence directly answers it."
         )
     if phase is PlanPhase.AUTHOR_AUDIT:
         return (
@@ -554,8 +557,9 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "errors, lost constraints, risks, validation gaps, or variants. Each criticism must "
             "be self-contained and identify the required change. Identify affected existing "
             "tasks in candidate_task_ids, plan-level fields in candidate_sections, and joint "
-            "variants in candidate_variant_ids. Return no criticism when the joint candidate "
-            "preserves your material contribution correctly."
+            "variants in candidate_variant_ids. Check technical claims against supplied adaptive "
+            "evidence and flag contradictions or obsolete open questions. Return no criticism "
+            "when the joint candidate preserves your material contribution correctly."
         )
     return (
         "Revise the joint candidate using every audit. Return one disposition for every exact "
@@ -565,7 +569,8 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
         "target_sections, and each removed joint variant in resolved_variant_ids. Return every "
         "still-unresolved variant. Existing task, section, and variant targets must have been "
         "identified by the corresponding critique. Preserve all tasks and plan-level fields not "
-        "explicitly targeted by an applied disposition."
+        "explicitly targeted by an applied disposition. Use supplied adaptive evidence only to "
+        "apply or reject audited corrections, never to introduce unrelated scope."
     )
 
 
@@ -620,6 +625,7 @@ def _workspace_context_payload(
     request: TurnRequest,
     *,
     include_content: bool,
+    include_enrichment_content: bool = False,
 ) -> dict[str, object]:
     context = request.workspace_context
     if context is None:
@@ -636,6 +642,13 @@ def _workspace_context_payload(
         value["evidence"] = [
             item.model_dump(mode="json")
             for item in context.evidence
+        ]
+    elif include_enrichment_content and context.manifest.enrichment_evidence_ids:
+        enrichment_ids = set(context.manifest.enrichment_evidence_ids)
+        value["adaptive_evidence"] = [
+            item.model_dump(mode="json")
+            for item in context.evidence
+            if item.id in enrichment_ids
         ]
     return value
 

@@ -34,7 +34,9 @@ first weak keyword match.
 
 Every independent author receives the same evidence snapshot. Tasks may cite
 only its known evidence identifiers. Later joint, audit, and assembly stages
-receive the manifest and project map, not the evidence contents again.
+receive the manifest and project map, not the initial evidence contents again.
+ADR-0017 adds one separately bounded adaptive evidence pass after independent
+planning; later stages receive only those newly recovered fragment contents.
 
 When all mandatory instructions fit, relevant evidence was selected, and at
 least half of the identifier-like query anchors are covered by non-instruction
@@ -56,6 +58,8 @@ remain the only workspace writes.
 - Referenced documentation directories cannot consume the whole evidence
   budget merely because an instruction mentions them.
 - Later stages do not pay again for full source fragments.
+- Newly discovered technical gaps may be enriched under ADR-0017 without
+  changing the identical initial snapshot.
 - A run leaves no temporary context files requiring retention or cleanup.
 - Evidence hashes make the exported plan auditable without copying source code.
 - Large or unusual workspaces fall back safely to protected reads rather than

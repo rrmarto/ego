@@ -322,8 +322,14 @@ class WorkspaceContextManifest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     context_id: str
+    initial_context_id: str | None = None
     workspace_fingerprint: str
     evidence: list[WorkspaceContextEvidenceReference] = Field(default_factory=list)
+    enrichment_evidence_ids: list[str] = Field(default_factory=list)
+    enrichment_bytes_used: int = Field(default=0, ge=0)
+    enrichment_byte_budget: int = Field(default=0, ge=0)
+    enrichment_truncated: bool = False
+    stale_evidence_ids: list[str] = Field(default_factory=list)
     omitted_paths: list[str] = Field(default_factory=list)
     truncated: bool = False
     sufficient: bool = False

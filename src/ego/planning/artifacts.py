@@ -77,7 +77,7 @@ class PlanArtifactWriter:
                 "sources.json": _sha256(sources_path.read_bytes()),
             }
             manifest = {
-                "artifact_version": 4,
+                "artifact_version": 5,
                 "plan_id": plan_id,
                 "run_id": run_id,
                 "state": "draft",

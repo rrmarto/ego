@@ -346,13 +346,16 @@ ego plans approve <plan-id>
 
 Plan resolves and snapshots the explicit source, then builds one bounded
 workspace context in memory for all participants. Independent plans receive
-the evidence contents once; later stages receive only its manifest and project
-map. If that context is insufficient, independent participants retain protected
-read/search as a fallback. Selection prefers matching source symbols, scores
-complete fragments, bounds referenced documentation directories, and verifies
-identifier-like query coverage before disabling reads. Ego creates no context
-cache: only evidence hashes, paths, bounds, and fallback metadata survive in
-the plan.
+the initial evidence contents once. Ego then performs one small deterministic
+adaptive pass over paths, symbols, tests, contracts, risks, and open questions
+discovered in those plans. Later stages receive its manifest, project map, and
+only the newly recovered fragments. If the initial context is insufficient,
+independent participants retain protected read/search as a fallback. Selection
+prefers matching source symbols, scores complete fragments, bounds referenced
+documentation directories, and verifies identifier-like query coverage before
+disabling reads. Ego creates no context cache: only evidence hashes, paths,
+bounds, initial/adaptive identifiers, and fallback metadata survive in the
+plan.
 
 Plan then builds a rotating joint candidate and lets every original author
 audit it. Final assembly runs only when criticism exists. Ego writes `plan.md`,

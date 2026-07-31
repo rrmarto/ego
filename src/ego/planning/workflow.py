@@ -33,6 +33,7 @@ from ego.planning.context import (
     WorkspaceContextBuilder,
     fallback_workspace_context,
 )
+from ego.planning.context_enrichment import stale_workspace_evidence_ids
 from ego.planning.sources import MAX_PLAN_BRIEF_CHARS, resolve_plan_sources
 from ego.storage import Database
 from ego.workspace import observe_git
@@ -167,12 +168,30 @@ class PlanWorkflow:
                         else "."
                     )
                 )
+            collaborative_context = workspace_context
+            try:
+                collaborative_context = await self.context_builder.enrich(
+                    workspace=request.workspace,
+                    context=workspace_context,
+                    candidates=candidates,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                warnings.append(
+                    "Adaptive workspace context enrichment failed "
+                    f"({type(error).__name__}); later stages retained the initial context."
+                )
+            if collaborative_context.manifest.enrichment_truncated:
+                warnings.append(
+                    "Adaptive workspace evidence reached its deterministic selection limits."
+                )
             joint_author, final_author = self.runtime.rotating_pair(run_id, candidates)
             joint = await self.collaboration.joint_draft(
                 run_id,
                 request,
                 sources,
-                workspace_context,
+                collaborative_context,
                 candidates,
                 joint_author,
                 active[joint_author],
@@ -183,7 +202,7 @@ class PlanWorkflow:
                 run_id,
                 request,
                 sources,
-                workspace_context,
+                collaborative_context,
                 candidates,
                 joint,
                 active,
@@ -198,7 +217,7 @@ class PlanWorkflow:
                     run_id,
                     request,
                     sources,
-                    workspace_context,
+                    collaborative_context,
                     joint,
                     audits,
                     final_author,
@@ -238,6 +257,31 @@ class PlanWorkflow:
                 missing_audits,
                 variants,
             )
+            try:
+                stale_evidence_ids = await stale_workspace_evidence_ids(
+                    request.workspace,
+                    collaborative_context.manifest,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                stale_evidence_ids = []
+                unresolved.append(
+                    "Workspace evidence could not be revalidated after collaboration "
+                    f"({type(error).__name__})."
+                )
+            if stale_evidence_ids:
+                collaborative_context = collaborative_context.model_copy(
+                    update={
+                        "manifest": collaborative_context.manifest.model_copy(
+                            update={"stale_evidence_ids": stale_evidence_ids}
+                        )
+                    }
+                )
+                unresolved.append(
+                    "Workspace evidence changed after planning began; rerun Plan against "
+                    f"the current workspace ({len(stale_evidence_ids)} stale fragments)."
+                )
             draft = apply_source_contract(
                 draft,
                 decisions,
@@ -255,12 +299,16 @@ class PlanWorkflow:
                 participant_ids=sorted(candidates),
                 variants=variants,
                 blocking_issues=unresolved,
-                workspace_context_manifest=workspace_context.manifest,
+                workspace_context_manifest=collaborative_context.manifest,
             )
             git_end = await observe_git(request.workspace)
             if git_start.head != git_end.head:
                 warnings.append(
                     "The workspace Git revision changed while the plan was generated."
+                )
+            if git_start.status != git_end.status:
+                warnings.append(
+                    "The workspace Git status changed while the plan was generated."
                 )
             plan = ImplementationPlan(
                 plan_id=plan_id,
@@ -270,7 +318,7 @@ class PlanWorkflow:
                 workspace=request.workspace,
                 decision_ids=decision_ids,
                 sources=sources,
-                workspace_context_manifest=workspace_context.manifest,
+                workspace_context_manifest=collaborative_context.manifest,
                 participant_plans=candidates,
                 joint_draft=joint,
                 audits=audits,
