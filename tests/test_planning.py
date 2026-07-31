@@ -27,6 +27,7 @@ from ego.models import (
     PlanState,
     PlanTask,
     PlanVariant,
+    PlanWorkspaceEvidence,
     RunStatus,
     ToolPolicy,
     TurnRequest,
@@ -65,11 +66,22 @@ class PlanParticipant:
         self.requests.append(request)
         if request.phase is PlanPhase.INDEPENDENT:
             assert request.workspace_context is not None
-            assert request.tool_policy.read is not request.workspace_context.manifest.sufficient
+            assert request.tool_policy == ToolPolicy.local_read_only()
             assert request.plan_sources
-            payload: PlanDraft | JointPlanDraft | PlanAudit | FinalPlanAssembly = (
-                self._draft(f"Independent contribution from {self.participant_id}.")
-            )
+            draft = self._draft(f"Independent contribution from {self.participant_id}.")
+            affected = request.workspace / draft.tasks[0].affected_paths[0]
+            if affected.is_file():
+                line_count = len(affected.read_text(encoding="utf-8").splitlines())
+                draft.tasks[0].workspace_evidence = [
+                    PlanWorkspaceEvidence(
+                        path=draft.tasks[0].affected_paths[0],
+                        line_start=1,
+                        line_end=line_count,
+                        explanation="Existing planning writer surface.",
+                        symbols=["PlanArtifactWriter"],
+                    )
+                ]
+            payload: PlanDraft | JointPlanDraft | PlanAudit | FinalPlanAssembly = draft
         elif request.phase is PlanPhase.JOINT_DRAFT:
             assert not request.tool_policy.read
             source_task_ids = [
@@ -77,8 +89,17 @@ class PlanParticipant:
                 for participant_id, draft in request.plan_candidates.items()
                 for task in draft.tasks
             ]
+            joint_draft = self._draft("Reconcile every independent contribution.")
+            joint_draft.tasks[0].evidence_ids = list(
+                dict.fromkeys(
+                    evidence_id
+                    for draft in request.plan_candidates.values()
+                    for task in draft.tasks
+                    for evidence_id in task.evidence_ids
+                )
+            )
             payload = JointPlanDraft(
-                draft=self._draft("Reconcile every independent contribution."),
+                draft=joint_draft,
                 coverage=[
                     PlanCoverage(
                         source_task_id=source_task_id,
@@ -113,9 +134,7 @@ class PlanParticipant:
             assert request.phase is PlanPhase.FINAL_ASSEMBLY
             assert request.joint_plan is not None
             critique_ids = [
-                item.id
-                for audit in request.plan_audits.values()
-                for item in audit.criticisms
+                item.id for audit in request.plan_audits.values() for item in audit.criticisms
             ]
             payload = FinalPlanAssembly(
                 draft=request.joint_plan.draft,
@@ -235,7 +254,7 @@ async def test_plan_collaborates_without_final_assembly_when_audits_are_clear(
     sources = json.loads((artifact / "sources.json").read_text(encoding="utf-8"))
     assert sources[0]["conclusion"] == "Create bounded Markdown plan artifacts."
     manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["artifact_version"] == 5
+    assert manifest["artifact_version"] == 6
     assert manifest["participants"] == sorted(participants)
     assert manifest["blocking_issues"] == []
     assert manifest["workspace_context"]["context_id"]
@@ -311,7 +330,7 @@ async def test_plan_accepts_direct_text_without_a_decision(
 
 
 @pytest.mark.asyncio
-async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
+async def test_plan_shares_one_context_and_freezes_discovered_workspace_evidence(
     database: Database,
     tmp_path: Path,
 ) -> None:
@@ -359,7 +378,7 @@ async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
         if request.workspace_context is not None
     }
     assert len(context_ids) == 1
-    assert all(not request.tool_policy.read for request in independent)
+    assert all(request.tool_policy == ToolPolicy.local_read_only() for request in independent)
     joint = next(
         request
         for participant in participants.values()
@@ -369,7 +388,7 @@ async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
     assert joint.workspace_context is not None
     assert joint.workspace_context.manifest.initial_context_id in context_ids
     assert joint.workspace_context.manifest.context_id not in context_ids
-    assert joint.workspace_context.manifest.enrichment_evidence_ids
+    assert joint.workspace_context.manifest.discovered_evidence_ids
     assert "def export_csv" in build_prompt(independent[0])
     assert "def export_csv" not in build_prompt(joint)
     assert "class PlanArtifactWriter" in build_prompt(joint)
@@ -635,9 +654,7 @@ def test_material_critique_cannot_be_applied_as_a_new_open_question(
     )
     audits = {"codex": PlanAudit(criticisms=[critique])}
     assembly = FinalPlanAssembly(
-        draft=joint.draft.model_copy(
-            update={"open_questions": ["How should expert mode behave?"]}
-        ),
+        draft=joint.draft.model_copy(update={"open_questions": ["How should expert mode behave?"]}),
         critique_dispositions=[
             CritiqueDisposition(
                 critique_id="codex:C1",
@@ -774,6 +791,30 @@ def test_plan_correction_prompt_does_not_repeat_decision_context(
 
     assert "Omitted on correction." in prompt
     assert package.conclusion not in prompt
+
+
+def test_independent_plan_evidence_correction_retains_protected_reads(
+    tmp_path: Path,
+) -> None:
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.INDEPENDENT,
+        question="Create the plan.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        tool_policy=ToolPolicy.local_read_only(),
+    )
+
+    prompt = build_prompt(
+        request,
+        correction="cited fragment does not contain render_plan",
+        previous_response={"title": "Wrong location"},
+    )
+
+    assert "Reinspect only the workspace evidence rejected by validation" in prompt
+    assert "Use protected read/search tools" in prompt
+    assert "Omitted on correction." in prompt
 
 
 def test_plan_rejects_unknown_workspace_evidence_ids(tmp_path: Path) -> None:

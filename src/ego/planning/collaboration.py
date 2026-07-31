@@ -31,11 +31,7 @@ class PlanCollaboration:
         workspace_context: WorkspaceContext,
         active: dict[str, Participant],
     ) -> dict[str, PlanDraft]:
-        tools = (
-            ToolPolicy()
-            if workspace_context.manifest.sufficient
-            else ToolPolicy.local_read_only()
-        )
+        tools = ToolPolicy.local_read_only()
         results = await self.runtime.parallel(
             run_id,
             PlanPhase.INDEPENDENT,

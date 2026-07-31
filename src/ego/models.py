@@ -326,6 +326,8 @@ class WorkspaceContextManifest(BaseModel):
     workspace_fingerprint: str
     evidence: list[WorkspaceContextEvidenceReference] = Field(default_factory=list)
     enrichment_evidence_ids: list[str] = Field(default_factory=list)
+    discovered_evidence_ids: list[str] = Field(default_factory=list)
+    discovery_bytes_used: int = Field(default=0, ge=0)
     enrichment_required_anchors: list[str] = Field(default_factory=list)
     enrichment_required_definition_anchors: list[str] = Field(default_factory=list)
     enrichment_unresolved_anchors: list[str] = Field(default_factory=list)
@@ -349,6 +351,16 @@ class WorkspaceContext(BaseModel):
     evidence: list[WorkspaceContextEvidence] = Field(default_factory=list)
 
 
+class PlanWorkspaceEvidence(BaseModel):
+    """A workspace fragment discovered by an independent Plan author."""
+
+    path: str
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    explanation: str
+    symbols: list[str] = Field(min_length=1)
+
+
 class PlanTask(BaseModel):
     id: str
     title: str
@@ -357,6 +369,7 @@ class PlanTask(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    workspace_evidence: list[PlanWorkspaceEvidence] = Field(default_factory=list)
 
 
 class PlanDraft(BaseModel):

@@ -32,19 +32,16 @@ omission limits. Source paths are preferred after mandatory instructions fit.
 Fragment selection scores the complete bounded window instead of accepting the
 first weak keyword match.
 
-Every independent author receives the same evidence snapshot. Tasks may cite
-only its known evidence identifiers. Later joint, audit, and assembly stages
-receive the manifest and project map, not the initial evidence contents again.
-ADR-0017 adds one separately bounded adaptive evidence pass after independent
-planning; later stages receive only those newly recovered fragment contents.
+Every independent author receives the same evidence snapshot. ADR-0018 treats
+that snapshot as orientation: authors retain protected local reads and may add
+bounded, directly cited workspace fragments. Later joint, audit, and assembly
+stages receive the frozen, deduplicated union rather than the initial evidence
+contents or independently rediscovering the workspace.
 
-When all mandatory instructions fit, relevant evidence was selected, and at
-least half of the identifier-like query anchors are covered by non-instruction
-evidence, participant tools are disabled for the entire Plan run. Commands,
-snake_case identifiers, CamelCase symbols, and acronyms are anchors. If the
-context is insufficient or construction fails, only independent authors retain
-the existing Seatbelt-protected local read/search policy. The manifest records
-the fallback reason.
+The manifest still reports whether the seed context covered its bounded query
+anchors, but that heuristic no longer disables independent discovery. Every
+independent author receives the existing Seatbelt-protected local read/search
+policy. Later stages have no tools.
 
 Context evidence contents are never written as a cache. The immutable Plan
 result and `manifest.json` retain only identifiers, paths, line ranges, hashes,
@@ -58,8 +55,8 @@ remain the only workspace writes.
 - Referenced documentation directories cannot consume the whole evidence
   budget merely because an instruction mentions them.
 - Later stages do not pay again for full source fragments.
-- Newly discovered technical gaps may be enriched under ADR-0017 without
-  changing the identical initial snapshot.
+- Newly discovered technical evidence is validated and frozen under ADR-0018
+  without changing the identical initial snapshot seen by every author.
 - A run leaves no temporary context files requiring retention or cleanup.
 - Evidence hashes make the exported plan auditable without copying source code.
 - Large or unusual workspaces fall back safely to protected reads rather than

@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from ego.models import HumanPlanBrief, PlanDraft, PlanTask
+from ego.models import HumanPlanBrief, PlanDraft, PlanTask, PlanWorkspaceEvidence
 from ego.planning.context import WorkspaceContextBuilder
-from ego.planning.context_enrichment import (
-    MAX_ENRICHMENT_BYTES,
+from ego.planning.evidence import (
+    freeze_discovered_evidence,
     stale_workspace_evidence_ids,
+    validate_plan_draft_evidence,
 )
 
 
@@ -23,10 +24,7 @@ def _source(instruction: str) -> HumanPlanBrief:
 
 
 def _workspace_paths(workspace: Path) -> set[Path]:
-    return {
-        path.relative_to(workspace)
-        for path in workspace.rglob("*")
-    }
+    return {path.relative_to(workspace) for path in workspace.rglob("*")}
 
 
 async def _track_workspace(workspace: Path) -> None:
@@ -148,14 +146,11 @@ async def test_workspace_context_selects_symbols_and_best_matching_windows(
         encoding="utf-8",
     )
     (source / "cli.py").write_text(
-        f'CREATED = "created"\n{filler}\n'
-        "def inspect_run(run_id: str):\n"
-        "    return run_id\n",
+        f'CREATED = "created"\n{filler}\ndef inspect_run(run_id: str):\n    return run_id\n',
         encoding="utf-8",
     )
     (planning / "context.py").write_text(
-        "class WorkspaceContextBuilder:\n"
-        "    def build(self): ...\n",
+        "class WorkspaceContextBuilder:\n    def build(self): ...\n",
         encoding="utf-8",
     )
     await _track_workspace(tmp_path)
@@ -178,13 +173,7 @@ async def test_workspace_context_selects_symbols_and_best_matching_windows(
     assert "WorkspaceContextManifest" in by_path["src/ego/models.py"].content
     assert "inspect_run" in by_path["src/ego/cli.py"].content
     assert "WorkspaceContextBuilder" in by_path["src/ego/planning/context.py"].content
-    assert len(
-        [
-            item
-            for item in context.evidence
-            if item.path.startswith("docs/decisions/")
-        ]
-    ) <= 3
+    assert len([item for item in context.evidence if item.path.startswith("docs/decisions/")]) <= 3
 
 
 @pytest.mark.asyncio
@@ -208,7 +197,7 @@ async def test_workspace_context_requires_query_anchor_coverage(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_workspace_context_adaptively_recovers_distant_symbols_and_consumers(
+async def test_workspace_context_freezes_author_discovered_evidence(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "src" / "ego"
@@ -225,15 +214,13 @@ async def test_workspace_context_adaptively_recovers_distant_symbols_and_consume
         encoding="utf-8",
     )
     (source / "cli.py").write_text(
-        "def inspect_run(run_id: str):\n"
-        "    return run_id\n",
+        "def inspect_run(run_id: str):\n    return run_id\n",
         encoding="utf-8",
     )
     tests = tmp_path / "tests"
     tests.mkdir()
     (tests / "test_plan_compat.py").write_text(
-        "def test_legacy_implementation_plan():\n"
-        "    assert True\n",
+        "def test_legacy_implementation_plan():\n    assert True\n",
         encoding="utf-8",
     )
     await _track_workspace(tmp_path)
@@ -251,149 +238,118 @@ async def test_workspace_context_adaptively_recovers_distant_symbols_and_consume
     )
     assert all("ImplementationPlan" not in item.content for item in initial.evidence)
 
-    enriched = await builder.enrich(
-        workspace=tmp_path,
-        context=initial,
-        candidates={
-            "codex": PlanDraft(
-                title="Expose WorkspaceContextManifest",
-                objective="Read it from ImplementationPlan.",
-                affected_areas=["src/ego/models.py"],
-                open_questions=[
-                    "Does ImplementationPlan persist workspace_context_manifest?"
-                ],
-                tasks=[
-                    PlanTask(
-                        id="compat",
-                        title="Preserve ImplementationPlan compatibility",
-                        description="Use workspace_context_manifest when present.",
-                        affected_paths=["src/ego/models.py"],
-                        acceptance_criteria=[
-                            "test_legacy_implementation_plan covers old records."
-                        ],
-                    )
+    candidate = PlanDraft(
+        title="Expose WorkspaceContextManifest",
+        objective="Read it from ImplementationPlan.",
+        affected_areas=["src/ego/models.py"],
+        tasks=[
+            PlanTask(
+                id="compat",
+                title="Preserve ImplementationPlan compatibility",
+                description="Use workspace_context_manifest when present.",
+                affected_paths=["src/ego/models.py", "tests/test_plan_compat.py"],
+                acceptance_criteria=["test_legacy_implementation_plan covers old records."],
+                workspace_evidence=[
+                    PlanWorkspaceEvidence(
+                        path="src/ego/models.py",
+                        line_start=383,
+                        line_end=384,
+                        explanation="ImplementationPlan owns the optional manifest.",
+                        symbols=["ImplementationPlan", "workspace_context_manifest"],
+                    ),
+                    PlanWorkspaceEvidence(
+                        path="tests/test_plan_compat.py",
+                        line_start=1,
+                        line_end=2,
+                        explanation="Existing compatibility test surface.",
+                        symbols=["test_legacy_implementation_plan"],
+                    ),
                 ],
             )
-        },
+        ],
+    )
+    frozen, candidates, issues = freeze_discovered_evidence(
+        tmp_path,
+        initial,
+        {"codex": candidate},
     )
 
-    adaptive = [
-        item
-        for item in enriched.evidence
-        if item.id in enriched.manifest.enrichment_evidence_ids
+    discovered = [
+        item for item in frozen.evidence if item.id in frozen.manifest.discovered_evidence_ids
     ]
-    assert enriched.manifest.initial_context_id == initial.manifest.context_id
-    assert enriched.manifest.context_id != initial.manifest.context_id
+    assert issues == []
+    assert frozen.manifest.initial_context_id == initial.manifest.context_id
+    assert frozen.manifest.context_id != initial.manifest.context_id
     assert any(
         item.path == "src/ego/models.py" and "ImplementationPlan" in item.content
-        for item in adaptive
+        for item in discovered
     )
     assert any(
         item.path == "tests/test_plan_compat.py"
         and "test_legacy_implementation_plan" in item.content
-        for item in adaptive
+        for item in discovered
     )
-    assert (
-        enriched.manifest.bytes_used - initial.manifest.bytes_used
-        <= MAX_ENRICHMENT_BYTES
-    )
-    assert (
-        enriched.manifest.enrichment_bytes_used
-        <= enriched.manifest.enrichment_byte_budget
-    )
-    assert enriched.manifest.bytes_used <= enriched.manifest.byte_budget
+    assert candidates["codex"].tasks[0].evidence_ids
 
     models_reference_ids = [
-        item.id
-        for item in enriched.manifest.evidence
-        if item.path == "src/ego/models.py"
+        item.id for item in frozen.manifest.evidence if item.path == "src/ego/models.py"
     ]
     (source / "models.py").write_text(
         "# changed after collaborative context was frozen\n",
         encoding="utf-8",
     )
 
-    stale_ids = await stale_workspace_evidence_ids(tmp_path, enriched.manifest)
+    stale_ids = await stale_workspace_evidence_ids(tmp_path, frozen.manifest)
 
     assert set(models_reference_ids).issubset(stale_ids)
 
 
 @pytest.mark.asyncio
-async def test_adaptive_context_reserves_author_gap_coverage(tmp_path: Path) -> None:
+async def test_workspace_evidence_rejects_a_symbol_cited_from_the_wrong_file(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "src" / "ego"
     source.mkdir(parents=True)
-    filler = "\n".join(f"filler_{index} = {index}" for index in range(220))
     (source / "cli.py").write_text(
-        "def render_plan(plan):\n"
-        "    return plan\n"
-        f"{filler}\n"
-        "def inspect_run(run_id):\n"
-        "    return run_id\n",
+        "def render_plan(plan):\n    return plan\n",
         encoding="utf-8",
     )
+    (source / "presentation.py").write_text("PANEL_TITLE = 'Plan'\n", encoding="utf-8")
     await _track_workspace(tmp_path)
-    builder = WorkspaceContextBuilder()
-    initial = await builder.build(
+    context = await WorkspaceContextBuilder().build(
         workspace=tmp_path,
         question="Expose a summary in ego inspect.",
         sources=[_source("Update ego inspect safely.")],
         git_head=None,
         git_status=None,
     )
-    assert all("def render_plan" not in item.content for item in initial.evidence)
-
-    def candidate(title: str, questions: list[str]) -> PlanDraft:
-        return PlanDraft(
-            title=title,
-            objective="Update inspect without guessing missing workspace contracts.",
-            affected_areas=["src/ego/cli.py"],
-            open_questions=questions,
-            tasks=[
-                PlanTask(
-                    id="inspect",
-                    title="Update inspect",
-                    description="Preserve the existing CLI contract.",
-                    affected_paths=["src/ego/cli.py"],
-                )
-            ],
-        )
-
-    enriched = await builder.enrich(
-        workspace=tmp_path,
-        context=initial,
-        candidates={
-            "claude": candidate(
-                "Locate rendering",
-                [
-                    "Where is `render_plan` defined?",
-                    "Does MissingPresentationContract exist?",
-                    "Is HistoricalInspectSchema persisted?",
+    draft = PlanDraft(
+        title="Locate plan rendering",
+        objective="Update the existing plan renderer without guessing its location.",
+        tasks=[
+            PlanTask(
+                id="inspect",
+                title="Update rendering",
+                description="Change render_plan.",
+                affected_paths=["src/ego/presentation.py"],
+                workspace_evidence=[
+                    PlanWorkspaceEvidence(
+                        path="src/ego/presentation.py",
+                        line_start=1,
+                        line_end=1,
+                        explanation="Claimed render location.",
+                        symbols=["render_plan"],
+                    )
                 ],
-            ),
-            "codex": candidate(
-                "Preserve expert mode",
-                [
-                    "How does TransparencyMode.EXPERT behave?",
-                    "Does ExpertInspectPayload change?",
-                    "Is LegacyInspectOutput stable?",
-                ],
-            ),
-            "opencode": candidate(
-                "Preserve storage",
-                [
-                    "Does ImplementationPlan own the manifest?",
-                    "Is WorkspaceContextManifest optional?",
-                    "Does workspace_context_manifest default safely?",
-                ],
-            ),
-        },
+            )
+        ],
     )
 
-    adaptive = [
-        item
-        for item in enriched.evidence
-        if item.id in enriched.manifest.enrichment_evidence_ids
-    ]
-    assert "render_plan" in enriched.manifest.enrichment_required_anchors
-    assert "render_plan" not in enriched.manifest.enrichment_unresolved_anchors
-    assert any("def render_plan" in item.content for item in adaptive)
+    errors = validate_plan_draft_evidence(
+        tmp_path,
+        draft,
+        context,
+        allow_discovered=True,
+    )
+
+    assert any("does not contain declared symbols: render_plan" in item for item in errors)

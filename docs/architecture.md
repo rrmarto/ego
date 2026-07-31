@@ -218,27 +218,21 @@ fragments. Explicit instruction files remain mandatory; referenced directories
 contribute only a small relevance-ranked sample. Identifier-like query anchors
 and whole-window scoring prevent weak early matches from hiding the requested
 symbols. Every participant receives that same initial snapshot and creates an
-independent plan.
+independent plan. The seed context never disables discovery: every independent
+author retains bounded Seatbelt-protected read, glob, grep, and search tools.
+It must cite exact lines and visible symbols for every task that affects an
+existing file. Missing, excluded, oversized, or symbol-mismatched citations
+make the structured response invalid instead of becoming an inferred path.
 
-Before joint drafting, Ego performs one deterministic adaptive evidence pass
-over normalized plan signals. Existing affected paths and technical identifiers
-from tasks, risks, validation, and open questions recover a small number of
-additional non-overlapping fragments. This covers distant symbols in the same
-file plus definitions, callers, tests, configuration, and persisted contracts
-in related files. The pass uses the existing safe catalog and exclusions, has
-separate anchor/file/fragment limits and a byte allowance that shrinks with the
-participant count to bound aggregate later-stage prompts. It makes no provider
-call, grants no tools, and writes nothing. A rotating author then creates one joint candidate
-from the normalized plans and adaptive evidence. Every original author audits
-that candidate in parallel against its own plan, frozen sources, and the same
-adaptive evidence. If any audit contains criticism, a different rotating
-participant performs one final assembly.
-
-Open-question identifiers receive a bounded per-author quota before global
-signal ranking. Required anchors with repository matches must be present in the
-initial or adaptive evidence; otherwise the manifest records them and Plan is
-not approvable. This prevents one author's verbose plan from hiding another
-author's explicit technical gap.
+Before joint drafting, Ego validates those citations against the canonical
+workspace, hashes them, assigns stable evidence identifiers, and freezes their
+deduplicated union in memory. Seed evidence explicitly referenced by a task
+joins the same packet. A rotating author creates one joint candidate from the
+normalized plans and frozen evidence. Every original author audits that
+candidate in parallel against its own plan, frozen sources, and the same
+evidence. If any audit contains criticism, a different rotating participant
+performs one final assembly. Collaborative stages have no workspace tools and
+cannot introduce new evidence.
 
 The joint candidate maps every qualified source task to an incorporated,
 merged, omitted, variant, or unmapped disposition. Audits and final dispositions
@@ -256,19 +250,16 @@ An applied material criticism must be fully resolved: adding a new open question
 is rejected and the unresolved issue must remain a blocking variant.
 
 The full initial `WorkspaceContext` is sent only to independent planning.
-Later stages receive its manifest and project map, adaptive evidence contents,
+Later stages receive its manifest, project map, frozen evidence contents,
 compact structured sources, and prior planning records. The final manifest
-links its initial context identifier to adaptive evidence identifiers and
-records adaptive truncation without persisting contents. Ego revalidates every
-referenced file hash after collaboration; drift is recorded and blocks approval
-instead of silently mixing snapshots. When the initial snapshot is sufficient,
-every provider call has tools disabled. If mandatory
-instructions, the catalog, or relevant evidence cannot fit deterministic
-bounds, identifier-like query anchors are not sufficiently covered, or context
-construction fails, only independent planning retains protected local
-read/search as a fallback. Each invalid structured response retains one
-corrective call; that correction receives only the prior response and
-validation error rather than repeating context.
+links its initial context identifier to author-discovered evidence identifiers
+without persisting contents. Ego revalidates every referenced file hash after
+collaboration; drift is recorded and blocks approval instead of silently mixing
+snapshots. Each invalid structured response retains one corrective call; that
+correction receives only the prior response and validation error rather than
+repeating context. Independent Plan evidence corrections retain protected
+reads so an invalid range or symbol can be repaired; other corrections do not
+reopen tools.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`

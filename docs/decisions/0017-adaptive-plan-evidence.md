@@ -1,6 +1,6 @@
 # ADR-0017: Plan enriches shared evidence after independent discovery
 
-Status: accepted
+Status: superseded by ADR-0018
 
 ## Context
 

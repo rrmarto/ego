@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 from ego.models import (
-    PlanDraft,
     PlanSource,
     WorkspaceContext,
     WorkspaceContextEvidence,
@@ -195,15 +194,11 @@ class WorkspaceContextBuilder:
             instruction_paths,
         )
         reference_set = set(reference_paths)
-        ranked_references = [
-            path
-            for _, path in scored
-            if path in reference_set
-        ][:MAX_INSTRUCTION_REFERENCES]
+        ranked_references = [path for _, path in scored if path in reference_set][
+            :MAX_INSTRUCTION_REFERENCES
+        ]
         selected_paths = list(
-            dict.fromkeys(
-                [*instruction_paths, *mandatory_paths, *ranked_references]
-            )
+            dict.fromkeys([*instruction_paths, *mandatory_paths, *ranked_references])
         )
         selected_paths.extend(
             path
@@ -250,21 +245,14 @@ class WorkspaceContextBuilder:
         if not catalog_complete:
             omitted.append("<workspace catalog exceeded limit>")
         truncated = bool(omitted)
-        relevant_items = [
-            item for item in evidence if Path(item.path) not in mandatory_set
-        ]
+        relevant_items = [item for item in evidence if Path(item.path) not in mandatory_set]
         covered_anchors = {
             anchor
             for anchor in anchors
-            if any(
-                anchor in f"{item.path}\n{item.content}".casefold()
-                for item in relevant_items
-            )
+            if any(anchor in f"{item.path}\n{item.content}".casefold() for item in relevant_items)
         }
         required_anchor_count = math.ceil(len(anchors) / 2)
-        anchors_sufficient = (
-            not anchors or len(covered_anchors) >= required_anchor_count
-        )
+        anchors_sufficient = not anchors or len(covered_anchors) >= required_anchor_count
         sufficient = (
             catalog_complete
             and not mandatory_missing
@@ -331,23 +319,6 @@ class WorkspaceContextBuilder:
             evidence=evidence,
         )
 
-    async def enrich(
-        self,
-        *,
-        workspace: Path,
-        context: WorkspaceContext,
-        candidates: dict[str, PlanDraft],
-    ) -> WorkspaceContext:
-        """Add bounded evidence for technical signals discovered by plan authors."""
-        from ego.planning.context_enrichment import enrich_workspace_context
-
-        return await enrich_workspace_context(
-            workspace=workspace,
-            context=context,
-            candidates=candidates,
-            byte_budget=self.byte_budget,
-        )
-
 
 def fallback_workspace_context(
     *,
@@ -374,16 +345,10 @@ def fallback_workspace_context(
 async def _catalog(workspace: Path) -> tuple[list[Path], bool]:
     git_paths = await _git_paths(workspace)
     raw_paths = (
-        git_paths
-        if git_paths is not None
-        else await asyncio.to_thread(_walk_paths, workspace)
+        git_paths if git_paths is not None else await asyncio.to_thread(_walk_paths, workspace)
     )
     paths = sorted(
-        {
-            path
-            for path in raw_paths
-            if _is_allowed_path(path) and _is_text_candidate(path)
-        },
+        {path for path in raw_paths if _is_allowed_path(path) and _is_text_candidate(path)},
         key=lambda item: item.as_posix(),
     )
     complete = len(paths) <= MAX_CATALOG_FILES
@@ -423,8 +388,7 @@ def _walk_paths(workspace: Path) -> list[Path]:
         directories[:] = [
             name
             for name in directories
-            if name.casefold() not in _EXCLUDED_PARTS
-            and not (root_path / name).is_symlink()
+            if name.casefold() not in _EXCLUDED_PARTS and not (root_path / name).is_symlink()
         ]
         for name in files:
             paths.append((root_path / name).relative_to(workspace))
@@ -440,10 +404,7 @@ async def _git_content_scores(
 ) -> dict[Path, int]:
     searches = [
         _git_grep(workspace, terms[:12]),
-        *(
-            _git_grep(workspace, [anchor])
-            for anchor in sorted(anchors)[:8]
-        ),
+        *(_git_grep(workspace, [anchor]) for anchor in sorted(anchors)[:8]),
     ]
     results = await asyncio.gather(*searches)
     scores = {path: 30 for path in results[0]}
@@ -512,9 +473,7 @@ def _query_terms(
                 continue
             terms.add(normalized)
             identifier_like = (
-                "_" in raw
-                or bool(_CAMEL_BOUNDARY.search(raw))
-                or (raw.isupper() and len(raw) >= 3)
+                "_" in raw or bool(_CAMEL_BOUNDARY.search(raw)) or (raw.isupper() and len(raw) >= 3)
             )
             if identifier_like:
                 anchors.add(normalized)
@@ -563,11 +522,7 @@ def _score_paths(
     scored: list[tuple[int, Path]] = []
     for path in catalog:
         value = path.as_posix().casefold()
-        score = sum(
-            (80 if term in anchors else 50)
-            for term in terms
-            if term in value
-        )
+        score = sum((80 if term in anchors else 50) for term in terms if term in value)
         score += content_scores.get(path, 0)
         if path in source_paths:
             score += 80
@@ -702,11 +657,7 @@ def _ranked_fragment_bounds(
     max_lines: int,
 ) -> list[tuple[int, int]]:
     folded = [line.casefold() for line in lines]
-    matching = [
-        index
-        for index, line in enumerate(folded)
-        if any(term in line for term in terms)
-    ]
+    matching = [index for index, line in enumerate(folded) if any(term in line for term in terms)]
     if not matching:
         return [(0, min(len(lines), max_lines))]
     ranked: list[tuple[tuple[int, int, int, int], tuple[int, int]]] = []
@@ -757,7 +708,7 @@ def _read_text(workspace: Path, path: Path) -> str | None:
         if resolved.stat().st_size > MAX_FILE_BYTES:
             return None
         return resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeError, ValueError):
+    except OSError, UnicodeError, ValueError:
         return None
 
 

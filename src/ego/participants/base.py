@@ -290,6 +290,10 @@ class CliParticipant(ABC):
                 attempt
                 and isinstance(request.phase, (InvestigationPhase, PlanPhase))
                 and previous_response is not None
+                and not (
+                    request.phase is PlanPhase.INDEPENDENT
+                    and request.tool_policy.read
+                )
             ):
                 turn_request = request.model_copy(update={"tool_policy": ToolPolicy()})
             prompt = build_prompt(

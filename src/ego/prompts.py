@@ -133,13 +133,10 @@ def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> N
             for argument_id in synthesis.supporting_argument_ids
         }
     if known_argument_ids is not None:
-        unknown_argument_ids = sorted(
-            set(response.supporting_argument_ids) - known_argument_ids
-        )
+        unknown_argument_ids = sorted(set(response.supporting_argument_ids) - known_argument_ids)
         if unknown_argument_ids:
             errors.append(
-                "synthesis referenced unknown argument ids: "
-                + ", ".join(unknown_argument_ids)
+                "synthesis referenced unknown argument ids: " + ", ".join(unknown_argument_ids)
             )
     if request.phase is Phase.RECONCILIATION and response.equivalent_to_peer is None:
         errors.append("reconciliation requires an explicit equivalence decision")
@@ -149,18 +146,17 @@ def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> N
 
 def _validate_plan_response(request: TurnRequest, response: BaseModel) -> None:
     evidence_ids = (
-        {
-            item.id
-            for item in request.workspace_context.manifest.evidence
-        }
+        {item.id for item in request.workspace_context.manifest.evidence}
         if request.workspace_context is not None
         else set()
     )
     if isinstance(response, PlanDraft):
         _validate_plan_draft(response, evidence_ids=evidence_ids)
+        _validate_grounded_plan_draft(request, response, allow_discovered=True)
         return
     if isinstance(response, JointPlanDraft):
         _validate_plan_draft(response.draft, evidence_ids=evidence_ids)
+        _validate_grounded_plan_draft(request, response.draft, allow_discovered=False)
         _validate_unique_ids(
             [item.source_task_id for item in response.coverage],
             "plan coverage source task",
@@ -172,6 +168,7 @@ def _validate_plan_response(request: TurnRequest, response: BaseModel) -> None:
         return
     if isinstance(response, FinalPlanAssembly):
         _validate_plan_draft(response.draft, evidence_ids=evidence_ids)
+        _validate_grounded_plan_draft(request, response.draft, allow_discovered=False)
         _validate_unique_ids(
             [item.critique_id for item in response.critique_dispositions],
             "critique disposition",
@@ -180,6 +177,26 @@ def _validate_plan_response(request: TurnRequest, response: BaseModel) -> None:
         _validate_final_plan_assembly(request, response)
         return
     raise ValueError("unsupported structured Plan response")
+
+
+def _validate_grounded_plan_draft(
+    request: TurnRequest,
+    draft: PlanDraft,
+    *,
+    allow_discovered: bool,
+) -> None:
+    if request.workspace_context is None:
+        return
+    from ego.planning.evidence import validate_plan_draft_evidence
+
+    errors = validate_plan_draft_evidence(
+        request.workspace,
+        draft,
+        request.workspace_context,
+        allow_discovered=allow_discovered,
+    )
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def _validate_final_plan_assembly(
@@ -194,9 +211,7 @@ def _validate_final_plan_assembly(
         known_tasks.update(joint_tasks)
         known_variants.update(item.id for item in request.joint_plan.variants)
     critiques = {
-        item.id: item
-        for audit in request.plan_audits.values()
-        for item in audit.criticisms
+        item.id: item for audit in request.plan_audits.values() for item in audit.criticisms
     }
     resolved_variants = [
         variant_id
@@ -226,8 +241,7 @@ def _validate_final_plan_assembly(
     invalid_resolutions = [
         item.critique_id
         for item in response.critique_dispositions
-        if item.action is not CritiqueDispositionAction.APPLIED
-        and item.resolved_variant_ids
+        if item.action is not CritiqueDispositionAction.APPLIED and item.resolved_variant_ids
     ]
     unknown_critiques: list[str] = []
     unauthorized_targets: list[str] = []
@@ -239,9 +253,7 @@ def _validate_final_plan_assembly(
         unauthorized_targets.extend(
             f"{item.critique_id}:task:{task_id}"
             for task_id in (
-                set(item.target_task_ids)
-                & joint_tasks
-                - set(critique.candidate_task_ids)
+                set(item.target_task_ids) & joint_tasks - set(critique.candidate_task_ids)
             )
         )
         unauthorized_targets.extend(
@@ -250,15 +262,10 @@ def _validate_final_plan_assembly(
         )
         unauthorized_targets.extend(
             f"{item.critique_id}:variant:{variant_id}"
-            for variant_id in (
-                set(item.resolved_variant_ids)
-                - set(critique.candidate_variant_ids)
-            )
+            for variant_id in (set(item.resolved_variant_ids) - set(critique.candidate_variant_ids))
         )
     joint_open_questions = (
-        set()
-        if request.joint_plan is None
-        else set(request.joint_plan.draft.open_questions)
+        set() if request.joint_plan is None else set(request.joint_plan.draft.open_questions)
     )
     added_open_questions = set(response.draft.open_questions) - joint_open_questions
     introduced_questions = [
@@ -285,17 +292,14 @@ def _validate_final_plan_assembly(
     )
     errors: list[str] = []
     if unknown_critiques:
-        errors.append(
-            "unknown critique dispositions: " + ", ".join(sorted(unknown_critiques))
-        )
+        errors.append("unknown critique dispositions: " + ", ".join(sorted(unknown_critiques)))
     if unknown_tasks:
         errors.append("unknown disposition target tasks: " + ", ".join(unknown_tasks))
     if unknown_variants:
         errors.append("unknown resolved variants: " + ", ".join(unknown_variants))
     if conflicting_variants:
         errors.append(
-            "variants cannot be both resolved and returned: "
-            + ", ".join(conflicting_variants)
+            "variants cannot be both resolved and returned: " + ", ".join(conflicting_variants)
         )
     if untargeted:
         errors.append(
@@ -304,8 +308,7 @@ def _validate_final_plan_assembly(
         )
     if invalid_resolutions:
         errors.append(
-            "only applied dispositions may resolve variants: "
-            + ", ".join(invalid_resolutions)
+            "only applied dispositions may resolve variants: " + ", ".join(invalid_resolutions)
         )
     if unauthorized_targets:
         errors.append(
@@ -315,8 +318,7 @@ def _validate_final_plan_assembly(
     if materially_deferred:
         errors.append(
             "material critiques cannot be marked applied by adding open questions; "
-            "return an explicit variant instead: "
-            + ", ".join(materially_deferred)
+            "return an explicit variant instead: " + ", ".join(materially_deferred)
         )
     if invalid_question_targets:
         errors.append(
@@ -326,9 +328,7 @@ def _validate_final_plan_assembly(
     if len(set(introduced_questions)) != len(introduced_questions):
         errors.append("introduced open questions must be attributed exactly once")
     if set(introduced_questions) != added_open_questions:
-        errors.append(
-            "every added open question must be attributed to one disposition"
-        )
+        errors.append("every added open question must be attributed to one disposition")
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -379,8 +379,7 @@ def _validate_plan_draft(
         )
         if unknown_evidence:
             raise ValueError(
-                "plan tasks reference unknown workspace evidence: "
-                + ", ".join(unknown_evidence)
+                "plan tasks reference unknown workspace evidence: " + ", ".join(unknown_evidence)
             )
 
 
@@ -396,11 +395,7 @@ def _strict_schema(value: object) -> object:
     if not isinstance(value, dict):
         return value
 
-    normalized = {
-        key: _strict_schema(item)
-        for key, item in value.items()
-        if key != "default"
-    }
+    normalized = {key: _strict_schema(item) for key, item in value.items() if key != "default"}
     properties = normalized.get("properties")
     if normalized.get("type") == "object" and isinstance(properties, dict):
         normalized["additionalProperties"] = False
@@ -497,8 +492,14 @@ def _build_plan_prompt(
         raise TypeError("plan prompt requires a planning stage")
     correction_text = ""
     if correction and previous_response is not None:
+        repair_instruction = (
+            "Reinspect only the workspace evidence rejected by validation. "
+            if phase is PlanPhase.INDEPENDENT and request.tool_policy.read
+            else "Do not inspect again or add scope. "
+        )
         correction_text = (
-            "\nRepair the previous structured plan. Do not inspect again or add scope. "
+            "\nRepair the previous structured plan. "
+            f"{repair_instruction}"
             f"Resolve only this validation error: {correction}\n"
             "Previous structured response:\n"
             f"{json.dumps(previous_response, ensure_ascii=False)}\n"
@@ -507,9 +508,10 @@ def _build_plan_prompt(
         correction_text = f"\nPrevious response validation error: {correction}\n"
     if phase is PlanPhase.INDEPENDENT and request.tool_policy.read:
         tool_instruction = (
-            "The prebuilt workspace context is incomplete. Read and search only the minimum "
-            "additional workspace files needed. Do not use web, shell, writes, plugins, MCP, "
-            "or delegation."
+            "The prebuilt context is orientation, not proof of completeness. Use protected "
+            "read/search tools to verify every existing file, symbol, caller, contract, and "
+            "test that materially shapes your plan. Do not use web, shell, writes, plugins, "
+            "MCP, or delegation."
         )
     else:
         tool_instruction = "Use only the supplied context and no tools."
@@ -526,7 +528,7 @@ def _build_plan_prompt(
             context["workspace_context"] = _workspace_context_payload(
                 request,
                 include_content=phase is PlanPhase.INDEPENDENT,
-                include_enrichment_content=phase is not PlanPhase.INDEPENDENT,
+                include_frozen_content=phase is not PlanPhase.INDEPENDENT,
             )
         if phase is PlanPhase.JOINT_DRAFT:
             context["candidate_plans"] = _candidate_plans(request.plan_candidates)
@@ -534,7 +536,7 @@ def _build_plan_prompt(
             context.update(
                 {
                     "own_plan": (
-                        request.own_plan.model_dump(mode="json")
+                        _compact_plan_draft(request.own_plan)
                         if request.own_plan is not None
                         else None
                     ),
@@ -583,10 +585,12 @@ Return only JSON matching this schema:
 def _plan_stage_instructions(phase: PlanPhase) -> str:
     if phase is PlanPhase.INDEPENDENT:
         return (
-            "Create an independent implementation plan. Inspect only the minimum workspace "
-            "surface needed. Do not imitate an assumed peer plan. Give every task a short, "
-            "stable id. Reference only supplied CTX evidence ids in evidence_ids; record "
-            "material context gaps as open questions."
+            "Create an independent implementation plan. Inspect the minimum workspace surface "
+            "needed, but never guess where existing behavior lives. Give every task a short, "
+            "stable id. For every existing affected file, cite exact lines in workspace_evidence "
+            "and declare the relevant symbols shown by that fragment. Supplied CTX ids may be "
+            "reused in evidence_ids. A citation must directly support the task's repository "
+            "claim; if it cannot be verified, record the gap instead of inventing a path."
         )
     if phase is PlanPhase.JOINT_DRAFT:
         return (
@@ -594,7 +598,7 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "order dependencies, and retain unique useful work. For every source task use the "
             "exact qualified id shown in candidate_plans and provide one coverage disposition. "
             "Never omit a task silently; incompatible approaches become variants. Use supplied "
-            "adaptive evidence to resolve factual workspace gaps discovered by the authors; do "
+            "frozen author-discovered evidence to resolve factual workspace gaps; do "
             "not preserve a technical question when that evidence directly answers it."
         )
     if phase is PlanPhase.AUTHOR_AUDIT:
@@ -604,7 +608,7 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "errors, lost constraints, risks, validation gaps, or variants. Each criticism must "
             "be self-contained and identify the required change. Identify affected existing "
             "tasks in candidate_task_ids, plan-level fields in candidate_sections, and joint "
-            "variants in candidate_variant_ids. Check technical claims against supplied adaptive "
+            "variants in candidate_variant_ids. Check technical claims against supplied frozen "
             "evidence and flag contradictions or obsolete open questions. Treat an unresolved "
             "choice that affects correctness as material, not advisory. Return no criticism "
             "when the joint candidate preserves your material contribution correctly."
@@ -620,7 +624,7 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
         "target_sections, and each removed joint variant in resolved_variant_ids. Return every "
         "still-unresolved variant. Existing task, section, and variant targets must have been "
         "identified by the corresponding critique. Preserve all tasks and plan-level fields not "
-        "explicitly targeted by an applied disposition. Use supplied adaptive evidence only to "
+        "explicitly targeted by an applied disposition. Use supplied frozen evidence only to "
         "apply or reject audited corrections, never to introduce unrelated scope."
     )
 
@@ -654,9 +658,7 @@ def _compact_plan_sources(
                     "evidence": [
                         {
                             key: evidence_value
-                            for key, evidence_value in evidence_item.model_dump(
-                                mode="json"
-                            ).items()
+                            for key, evidence_value in evidence_item.model_dump(mode="json").items()
                             if key
                             not in {
                                 "file_sha256",
@@ -676,7 +678,7 @@ def _workspace_context_payload(
     request: TurnRequest,
     *,
     include_content: bool,
-    include_enrichment_content: bool = False,
+    include_frozen_content: bool = False,
 ) -> dict[str, object]:
     context = request.workspace_context
     if context is None:
@@ -690,16 +692,11 @@ def _workspace_context_payload(
         "project_map": context.project_map,
     }
     if include_content:
-        value["evidence"] = [
-            item.model_dump(mode="json")
-            for item in context.evidence
-        ]
-    elif include_enrichment_content and context.manifest.enrichment_evidence_ids:
-        enrichment_ids = set(context.manifest.enrichment_evidence_ids)
-        value["adaptive_evidence"] = [
-            item.model_dump(mode="json")
-            for item in context.evidence
-            if item.id in enrichment_ids
+        value["evidence"] = [item.model_dump(mode="json") for item in context.evidence]
+    elif include_frozen_content and context.manifest.discovered_evidence_ids:
+        discovered_ids = set(context.manifest.discovered_evidence_ids)
+        value["frozen_workspace_evidence"] = [
+            item.model_dump(mode="json") for item in context.evidence if item.id in discovered_ids
         ]
     return value
 
@@ -707,7 +704,7 @@ def _workspace_context_payload(
 def _candidate_plans(candidates: dict[str, PlanDraft]) -> dict[str, object]:
     result: dict[str, object] = {}
     for participant_id, draft in candidates.items():
-        value = draft.model_dump(mode="json")
+        value = _compact_plan_draft(draft)
         tasks = value.get("tasks")
         if isinstance(tasks, list):
             for task in tasks:
@@ -717,13 +714,14 @@ def _candidate_plans(candidates: dict[str, PlanDraft]) -> dict[str, object]:
     return result
 
 
+def _compact_plan_draft(draft: PlanDraft) -> dict[str, object]:
+    return draft.model_dump(mode="json", exclude={"tasks": {"__all__": {"workspace_evidence"}}})
+
+
 def _own_task_ids(request: TurnRequest) -> list[str]:
     if request.own_plan is None or request.plan_author_id is None:
         return []
-    return [
-        f"{request.plan_author_id}:{task.id}"
-        for task in request.own_plan.tasks
-    ]
+    return [f"{request.plan_author_id}:{task.id}" for task in request.own_plan.tasks]
 
 
 def _build_investigation_prompt(

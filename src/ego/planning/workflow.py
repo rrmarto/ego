@@ -33,7 +33,10 @@ from ego.planning.context import (
     WorkspaceContextBuilder,
     fallback_workspace_context,
 )
-from ego.planning.context_enrichment import stale_workspace_evidence_ids
+from ego.planning.evidence import (
+    freeze_discovered_evidence,
+    stale_workspace_evidence_ids,
+)
 from ego.planning.sources import MAX_PLAN_BRIEF_CHARS, resolve_plan_sources
 from ego.storage import Database
 from ego.workspace import observe_git
@@ -62,9 +65,7 @@ class PlanInput(AgentInput):
             if not instruction:
                 raise ValueError("plan text cannot be empty")
             if len(instruction) > MAX_PLAN_BRIEF_CHARS:
-                raise ValueError(
-                    f"plan text exceeds the {MAX_PLAN_BRIEF_CHARS}-character limit"
-                )
+                raise ValueError(f"plan text exceeds the {MAX_PLAN_BRIEF_CHARS}-character limit")
             self.brief = instruction
         return self
 
@@ -103,9 +104,7 @@ class PlanWorkflow:
             brief=request.brief,
             brief_file=request.brief_file,
         )
-        decisions = [
-            source for source in sources if isinstance(source, AcceptedDecisionPackage)
-        ]
+        decisions = [source for source in sources if isinstance(source, AcceptedDecisionPackage)]
         decision_ids = [source.decision_id for source in decisions]
         git_start = await observe_git(request.workspace)
         try:
@@ -160,32 +159,19 @@ class PlanWorkflow:
             ]
             if not workspace_context.manifest.sufficient:
                 warnings.append(
-                    "Workspace context was insufficient; independent participants retained "
-                    "protected workspace reads"
+                    "The initial workspace context was incomplete; independent participants "
+                    "used protected workspace reads"
                     + (
                         f": {workspace_context.manifest.fallback_reason}."
                         if workspace_context.manifest.fallback_reason
                         else "."
                     )
                 )
-            collaborative_context = workspace_context
-            try:
-                collaborative_context = await self.context_builder.enrich(
-                    workspace=request.workspace,
-                    context=workspace_context,
-                    candidates=candidates,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                warnings.append(
-                    "Adaptive workspace context enrichment failed "
-                    f"({type(error).__name__}); later stages retained the initial context."
-                )
-            if collaborative_context.manifest.enrichment_truncated:
-                warnings.append(
-                    "Adaptive workspace evidence reached its deterministic selection limits."
-                )
+            collaborative_context, candidates, evidence_issues = freeze_discovered_evidence(
+                request.workspace,
+                workspace_context,
+                candidates,
+            )
             joint_author, final_author = self.runtime.rotating_pair(run_id, candidates)
             joint = await self.collaboration.joint_draft(
                 run_id,
@@ -257,14 +243,10 @@ class PlanWorkflow:
                 missing_audits,
                 variants,
             )
-            if collaborative_context.manifest.enrichment_unresolved_anchors:
-                unresolved.append(
-                    "Adaptive workspace evidence omitted required technical anchors: "
-                    + ", ".join(
-                        collaborative_context.manifest.enrichment_unresolved_anchors
-                    )
-                    + "."
-                )
+            unresolved.extend(
+                "Independent plan contains unsupported workspace evidence: " + issue
+                for issue in evidence_issues
+            )
             try:
                 stale_evidence_ids = await stale_workspace_evidence_ids(
                     request.workspace,
@@ -311,13 +293,9 @@ class PlanWorkflow:
             )
             git_end = await observe_git(request.workspace)
             if git_start.head != git_end.head:
-                warnings.append(
-                    "The workspace Git revision changed while the plan was generated."
-                )
+                warnings.append("The workspace Git revision changed while the plan was generated.")
             if git_start.status != git_end.status:
-                warnings.append(
-                    "The workspace Git status changed while the plan was generated."
-                )
+                warnings.append("The workspace Git status changed while the plan was generated.")
             plan = ImplementationPlan(
                 plan_id=plan_id,
                 run_id=run_id,
