@@ -407,6 +407,18 @@ class PlanCritiqueCategory(StrEnum):
     VARIANT = "variant"
 
 
+class PlanSection(StrEnum):
+    TITLE = "title"
+    OBJECTIVE = "objective"
+    SCOPE = "scope"
+    CONSTRAINTS = "constraints"
+    NON_GOALS = "non_goals"
+    AFFECTED_AREAS = "affected_areas"
+    VALIDATION = "validation"
+    RISKS = "risks"
+    OPEN_QUESTIONS = "open_questions"
+
+
 class PlanCritique(BaseModel):
     id: str
     severity: PlanCritiqueSeverity
@@ -415,6 +427,8 @@ class PlanCritique(BaseModel):
     required_change: str
     source_task_ids: list[str] = Field(default_factory=list)
     candidate_task_ids: list[str] = Field(default_factory=list)
+    candidate_sections: list[PlanSection] = Field(default_factory=list)
+    candidate_variant_ids: list[str] = Field(default_factory=list)
 
 
 class PlanAudit(BaseModel):
@@ -431,6 +445,8 @@ class CritiqueDisposition(BaseModel):
     critique_id: str
     action: CritiqueDispositionAction
     target_task_ids: list[str] = Field(default_factory=list)
+    target_sections: list[PlanSection] = Field(default_factory=list)
+    resolved_variant_ids: list[str] = Field(default_factory=list)
     rationale: str
 
 

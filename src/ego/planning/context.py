@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import re
 from pathlib import Path
@@ -15,12 +16,16 @@ from ego.models import (
 )
 
 MAX_CONTEXT_BYTES = 128 * 1024
-MAX_CONTEXT_FILES = 24
+MAX_CONTEXT_FILES = 12
 MAX_CATALOG_FILES = 20_000
 MAX_FRAGMENT_LINES = 100
 MAX_FILE_BYTES = 256 * 1024
 MAX_PROJECT_MAP_PATHS = 120
 MAX_OMITTED_PATHS = 50
+MAX_QUERY_TERMS = 32
+MAX_INSTRUCTION_REFERENCES = 3
+SOURCE_PATH_BONUS = 400
+_SOURCE_ROOTS = frozenset({"app", "lib", "packages", "src"})
 
 _EXCLUDED_PARTS = frozenset(
     {
@@ -111,29 +116,46 @@ _TEXT_NAMES = frozenset(
 _STOPWORDS = frozenset(
     {
         "actualizar",
+        "add",
         "agente",
         "build",
+        "con",
         "crear",
+        "create",
+        "del",
         "desde",
+        "direct",
         "esta",
         "este",
+        "from",
         "hacer",
         "implementation",
+        "instruction",
+        "las",
+        "los",
         "para",
         "plan",
         "planning",
+        "por",
         "process",
         "proceso",
         "project",
+        "que",
+        "sin",
         "sobre",
         "that",
+        "the",
         "this",
         "todo",
+        "una",
+        "uno",
         "with",
     }
 )
 _TERM = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ_][A-Za-zÀ-ÖØ-öø-ÿ0-9_.-]{2,}")
 _BACKTICK_PATH = re.compile(r"`([^`\n]+)`")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-zà-öø-ÿ0-9])(?=[A-ZÀ-ÖØ-Þ])")
+_EGO_COMMAND = re.compile(r"\bego\s+([A-Za-z][A-Za-z0-9_-]{2,})", re.IGNORECASE)
 
 
 class WorkspaceContextBuilder:
@@ -153,25 +175,39 @@ class WorkspaceContextBuilder:
     ) -> WorkspaceContext:
         workspace = await asyncio.to_thread(workspace.resolve)
         catalog, catalog_complete = await _catalog(workspace)
-        terms = _query_terms(question, sources)
+        terms, anchors = _query_terms(question, sources)
         source_paths = _source_paths(sources)
         modified_paths = _modified_paths(git_status)
-        content_matches = await _git_grep(workspace, terms)
+        content_scores = await _git_content_scores(workspace, terms, anchors)
         scored = _score_paths(
             catalog,
             terms=terms,
+            anchors=anchors,
             source_paths=source_paths,
             modified_paths=modified_paths,
-            content_matches=content_matches,
+            content_scores=content_scores,
         )
         relevant_paths = [path for score, path in scored if score > 0]
         instruction_paths = _instruction_paths(workspace, catalog, relevant_paths)
-        mandatory_paths = _mandatory_references(workspace, instruction_paths)
-        selected_paths = list(dict.fromkeys([*instruction_paths, *mandatory_paths]))
+        mandatory_paths, reference_paths = _instruction_references(
+            workspace,
+            instruction_paths,
+        )
+        reference_set = set(reference_paths)
+        ranked_references = [
+            path
+            for _, path in scored
+            if path in reference_set
+        ][:MAX_INSTRUCTION_REFERENCES]
+        selected_paths = list(
+            dict.fromkeys(
+                [*instruction_paths, *mandatory_paths, *ranked_references]
+            )
+        )
         selected_paths.extend(
             path
             for path in relevant_paths
-            if path not in selected_paths
+            if path not in selected_paths and path not in reference_set
         )
         project_map = [path.as_posix() for _, path in scored[:MAX_PROJECT_MAP_PATHS]]
         bytes_used = sum(len(path.encode("utf-8")) + 1 for path in project_map)
@@ -191,6 +227,7 @@ class WorkspaceContextBuilder:
                 workspace,
                 path,
                 terms=terms,
+                anchors=anchors,
                 full_file=path in mandatory_set,
             )
             if item is None:
@@ -212,10 +249,26 @@ class WorkspaceContextBuilder:
         if not catalog_complete:
             omitted.append("<workspace catalog exceeded limit>")
         truncated = bool(omitted)
+        relevant_items = [
+            item for item in evidence if Path(item.path) not in mandatory_set
+        ]
+        covered_anchors = {
+            anchor
+            for anchor in anchors
+            if any(
+                anchor in f"{item.path}\n{item.content}".casefold()
+                for item in relevant_items
+            )
+        }
+        required_anchor_count = math.ceil(len(anchors) / 2)
+        anchors_sufficient = (
+            not anchors or len(covered_anchors) >= required_anchor_count
+        )
         sufficient = (
             catalog_complete
             and not mandatory_missing
             and relevant_evidence > 0
+            and anchors_sufficient
         )
         fallback_reason = None
         if not sufficient:
@@ -223,6 +276,11 @@ class WorkspaceContextBuilder:
                 fallback_reason = "mandatory workspace instructions did not fit"
             elif not catalog_complete:
                 fallback_reason = "workspace catalog exceeded the deterministic limit"
+            elif not anchors_sufficient:
+                fallback_reason = (
+                    "workspace evidence covered "
+                    f"{len(covered_anchors)}/{len(anchors)} query anchors"
+                )
             else:
                 fallback_reason = "no relevant workspace evidence was selected"
         references = [
@@ -357,6 +415,26 @@ def _walk_paths(workspace: Path) -> list[Path]:
     return paths
 
 
+async def _git_content_scores(
+    workspace: Path,
+    terms: list[str],
+    anchors: set[str],
+) -> dict[Path, int]:
+    searches = [
+        _git_grep(workspace, terms[:12]),
+        *(
+            _git_grep(workspace, [anchor])
+            for anchor in sorted(anchors)[:8]
+        ),
+    ]
+    results = await asyncio.gather(*searches)
+    scores = {path: 30 for path in results[0]}
+    for paths in results[1:]:
+        for path in paths:
+            scores[path] = scores.get(path, 0) + 80
+    return scores
+
+
 async def _git_grep(workspace: Path, terms: list[str]) -> set[Path]:
     if not terms:
         return set()
@@ -391,20 +469,46 @@ async def _git_grep(workspace: Path, terms: list[str]) -> set[Path]:
     }
 
 
-def _query_terms(question: str, sources: list[PlanSource]) -> list[str]:
+def _query_terms(
+    question: str,
+    sources: list[PlanSource],
+) -> tuple[list[str], set[str]]:
     values = [question]
     for source in sources:
         if source.source_kind == "decision":
             values.extend((source.question, source.conclusion))
         else:
             values.append(source.instruction)
-    terms = {
-        match.group(0).casefold()
-        for value in values
-        for match in _TERM.finditer(value)
-        if match.group(0).casefold() not in _STOPWORDS
-    }
-    return sorted(terms, key=lambda value: (-len(value), value))[:24]
+    terms: set[str] = set()
+    anchors: set[str] = set()
+    for value in values:
+        for command in _EGO_COMMAND.findall(value):
+            normalized_command = command.casefold()
+            terms.add(normalized_command)
+            anchors.add(normalized_command)
+        for match in _TERM.finditer(value):
+            raw = match.group(0).strip("._-")
+            normalized = raw.casefold()
+            if len(normalized) < 3 or normalized in _STOPWORDS:
+                continue
+            terms.add(normalized)
+            identifier_like = (
+                "_" in raw
+                or bool(_CAMEL_BOUNDARY.search(raw))
+                or (raw.isupper() and len(raw) >= 3)
+            )
+            if identifier_like:
+                anchors.add(normalized)
+            for part in re.split(r"[._-]+", _CAMEL_BOUNDARY.sub("_", raw)):
+                normalized_part = part.casefold()
+                if len(normalized_part) >= 3 and normalized_part not in _STOPWORDS:
+                    terms.add(normalized_part)
+    ordered = sorted(
+        terms,
+        key=lambda value: (value not in anchors, -len(value), value),
+    )
+    selected = ordered[:MAX_QUERY_TERMS]
+    return selected, anchors.intersection(selected)
 
 
 def _source_paths(sources: list[PlanSource]) -> set[Path]:
@@ -432,20 +536,26 @@ def _score_paths(
     catalog: list[Path],
     *,
     terms: list[str],
+    anchors: set[str],
     source_paths: set[Path],
     modified_paths: set[Path],
-    content_matches: set[Path],
+    content_scores: dict[Path, int],
 ) -> list[tuple[int, Path]]:
     scored: list[tuple[int, Path]] = []
     for path in catalog:
         value = path.as_posix().casefold()
-        score = 50 * sum(term in value for term in terms)
-        if path in content_matches:
-            score += 30
+        score = sum(
+            (80 if term in anchors else 50)
+            for term in terms
+            if term in value
+        )
+        score += content_scores.get(path, 0)
         if path in source_paths:
             score += 80
         if path in modified_paths:
             score += 30
+        if path.parts and path.parts[0].casefold() in _SOURCE_ROOTS:
+            score += SOURCE_PATH_BONUS
         if path.name in _TEXT_NAMES or path.name.casefold() in {
             "cargo.toml",
             "package.json",
@@ -480,8 +590,12 @@ def _instruction_paths(
     return result
 
 
-def _mandatory_references(workspace: Path, instruction_paths: list[Path]) -> list[Path]:
-    references: list[Path] = []
+def _instruction_references(
+    workspace: Path,
+    instruction_paths: list[Path],
+) -> tuple[list[Path], list[Path]]:
+    mandatory: list[Path] = []
+    ranked: list[Path] = []
     for path in instruction_paths:
         text = _read_text(workspace, path)
         if text is None:
@@ -499,7 +613,7 @@ def _mandatory_references(workspace: Path, instruction_paths: list[Path]) -> lis
                 continue
             absolute = workspace / candidate
             if absolute.is_dir() and not absolute.is_symlink():
-                references.extend(
+                ranked.extend(
                     item.relative_to(workspace)
                     for item in sorted(absolute.rglob("*.md"))
                     if item.is_file()
@@ -507,8 +621,8 @@ def _mandatory_references(workspace: Path, instruction_paths: list[Path]) -> lis
                     and _is_allowed_path(item.relative_to(workspace))
                 )
             elif absolute.is_file() and not absolute.is_symlink():
-                references.append(candidate)
-    return list(dict.fromkeys(references))
+                mandatory.append(candidate)
+    return list(dict.fromkeys(mandatory)), list(dict.fromkeys(ranked))
 
 
 def _evidence(
@@ -516,6 +630,7 @@ def _evidence(
     path: Path,
     *,
     terms: list[str],
+    anchors: set[str],
     full_file: bool,
 ) -> WorkspaceContextEvidence | None:
     text = _read_text(workspace, path)
@@ -528,15 +643,7 @@ def _evidence(
         start, end = 1, len(lines)
         reason = "mandatory project instruction"
     else:
-        matching = [
-            index
-            for index, line in enumerate(lines)
-            if any(term in line.casefold() for term in terms)
-        ]
-        center = matching[0] if matching else 0
-        start = max(0, center - MAX_FRAGMENT_LINES // 3)
-        end = min(len(lines), start + MAX_FRAGMENT_LINES)
-        start = max(0, end - MAX_FRAGMENT_LINES)
+        start, end = _best_fragment(lines, terms, anchors)
         reason = "query-relevant workspace evidence"
         start += 1
     content = "\n".join(lines[start - 1 : end]) + "\n"
@@ -553,6 +660,51 @@ def _evidence(
         reason=reason,
         content=content,
     )
+
+
+def _best_fragment(
+    lines: list[str],
+    terms: list[str],
+    anchors: set[str],
+) -> tuple[int, int]:
+    folded = [line.casefold() for line in lines]
+    matching = [
+        index
+        for index, line in enumerate(folded)
+        if any(term in line for term in terms)
+    ]
+    if not matching:
+        return 0, min(len(lines), MAX_FRAGMENT_LINES)
+    best: tuple[int, int, int, int] | None = None
+    best_bounds = (0, min(len(lines), MAX_FRAGMENT_LINES))
+    for center in matching:
+        start = max(0, center - MAX_FRAGMENT_LINES // 3)
+        end = min(len(lines), start + MAX_FRAGMENT_LINES)
+        start = max(0, end - MAX_FRAGMENT_LINES)
+        window = "\n".join(folded[start:end])
+        covered = {term for term in terms if term in window}
+        definition_hits = sum(
+            1
+            for line in folded[start:end]
+            for anchor in anchors
+            if (
+                f"def {anchor}" in line
+                or f"class {anchor}" in line
+                or f'command("{anchor}")' in line
+                or f"command('{anchor}')" in line
+            )
+        )
+        occurrences = sum(window.count(anchor) for anchor in anchors)
+        score = (
+            sum(10 if term in anchors else 1 for term in covered)
+            + definition_hits * 25
+            + min(occurrences, 20)
+        )
+        candidate = (score, definition_hits, len(covered & anchors), -start)
+        if best is None or candidate > best:
+            best = candidate
+            best_bounds = (start, end)
+    return best_bounds
 
 
 def _read_text(workspace: Path, path: Path) -> str | None:

@@ -214,11 +214,14 @@ Planning requires at least two available participants. Without an explicit
 selection it uses every configured participant. Before provider calls, Ego
 builds one deterministic, bounded `WorkspaceContext` in memory from applicable
 project instructions, a compact path map, and query-relevant evidence
-fragments. Every participant receives that same snapshot. Each participant
-first creates an independent plan; a rotating author then creates one joint
-candidate from the normalized plans with no tools. Every original author audits
-that candidate in parallel against its own plan and the frozen sources. If any
-audit contains criticism, a different rotating participant performs one final
+fragments. Explicit instruction files remain mandatory; referenced directories
+contribute only a small relevance-ranked sample. Identifier-like query anchors
+and whole-window scoring prevent weak early matches from hiding the requested
+symbols. Every participant receives that same snapshot. Each participant first
+creates an independent plan; a rotating author then creates one joint candidate
+from the normalized plans with no tools. Every original author audits that
+candidate in parallel against its own plan and the frozen sources. If any audit
+contains criticism, a different rotating participant performs one final
 assembly.
 
 The joint candidate maps every qualified source task to an incorporated,
@@ -229,14 +232,20 @@ that is not explicitly applied, an unmapped contribution, a missing audit, or a
 variant becomes a blocking issue. Blocking plans remain inspectable but cannot
 be approved. There is no voting or automatic retry loop.
 
+Final dispositions name changed task identifiers, changed plan-level sections,
+and any joint variants they resolve. A variant omitted without an explicit
+resolution remains blocking. This lets global criticisms be applied without
+fake task targets while preserving every untouched section.
+
 The full `WorkspaceContext` is sent only to independent planning. Later stages
 receive its manifest and project map with compact structured sources and prior
 planning records. When the snapshot is sufficient, every provider call has
 tools disabled. If mandatory instructions, the catalog, or relevant evidence
-cannot fit deterministic bounds—or context construction fails—only independent
-planning retains protected local read/search as a fallback. Each invalid
-structured response retains one corrective call; that correction receives only
-the prior response and validation error rather than repeating the full context.
+cannot fit deterministic bounds, identifier-like query anchors are not
+sufficiently covered, or context construction fails, only independent planning
+retains protected local read/search as a fallback. Each invalid structured
+response retains one corrective call; that correction receives only the prior
+response and validation error rather than repeating the full context.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`

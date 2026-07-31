@@ -23,8 +23,10 @@ from ego.models import (
     PlanCritiqueSeverity,
     PlanDraft,
     PlanPhase,
+    PlanSection,
     PlanState,
     PlanTask,
+    PlanVariant,
     RunStatus,
     ToolPolicy,
     TurnRequest,
@@ -36,6 +38,7 @@ from ego.models import (
 from ego.planning import PlanArtifactError, PlanArtifactWriter, PlanInput, PlanWorkflow
 from ego.planning.assembly import (
     blocking_issues,
+    merge_variants,
     normalize_final_assembly,
     normalize_joint_draft,
 )
@@ -497,6 +500,111 @@ def test_missing_collaboration_mappings_become_blocking_variants() -> None:
     issues = blocking_issues(joint, {"claude": audit}, assembly, [], [])
     assert any("codex:T1 remains unmapped" in issue for issue in issues)
     assert any("claude:C1 remains a variant" in issue for issue in issues)
+
+
+def test_final_assembly_explicitly_resolves_variants_and_global_sections() -> None:
+    joint = JointPlanDraft(
+        draft=PlanParticipant._draft("Joint candidate.").model_copy(
+            update={"open_questions": ["Should V1 remain?"]}
+        ),
+        variants=[
+            PlanVariant(
+                id="V1",
+                question="Should V1 remain?",
+                options=["Keep it", "Resolve it"],
+            )
+        ],
+    )
+    audit = PlanAudit(
+        criticisms=[
+            PlanCritique(
+                id="codex:C1",
+                severity=PlanCritiqueSeverity.MATERIAL,
+                category=PlanCritiqueCategory.VARIANT,
+                description="V1 is resolved by existing evidence.",
+                required_change="Remove V1 and its open question.",
+                candidate_sections=[PlanSection.OPEN_QUESTIONS],
+                candidate_variant_ids=["V1"],
+            )
+        ]
+    )
+    assembly, warnings = normalize_final_assembly(
+        FinalPlanAssembly(
+            draft=joint.draft.model_copy(update={"open_questions": []}),
+            critique_dispositions=[
+                CritiqueDisposition(
+                    critique_id="codex:C1",
+                    action=CritiqueDispositionAction.APPLIED,
+                    target_sections=[PlanSection.OPEN_QUESTIONS],
+                    resolved_variant_ids=["V1"],
+                    rationale="The audit resolves the global question.",
+                )
+            ],
+        ),
+        {"codex": audit},
+        joint,
+    )
+
+    assert assembly is not None
+    assert warnings == []
+    variants = merge_variants(
+        joint.variants,
+        assembly.variants,
+        assembly.critique_dispositions[0].resolved_variant_ids,
+    )
+    assert variants == []
+    assert blocking_issues(joint, {"codex": audit}, assembly, [], variants) == []
+
+
+def test_final_assembly_cannot_silently_remove_a_variant() -> None:
+    variant = PlanVariant(
+        id="V1",
+        question="Choose an implementation.",
+        options=["A", "B"],
+    )
+
+    assert merge_variants([variant], []) == [variant]
+
+
+def test_final_assembly_requires_explicit_targets_for_global_changes(
+    tmp_path: Path,
+) -> None:
+    joint = JointPlanDraft(draft=PlanParticipant._draft("Joint candidate."))
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.FINAL_ASSEMBLY,
+        question="Assemble the final plan.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        joint_plan=joint,
+        plan_audits={
+            "codex": PlanAudit(
+                criticisms=[
+                    PlanCritique(
+                        id="codex:C1",
+                        severity=PlanCritiqueSeverity.ADVISORY,
+                        category=PlanCritiqueCategory.CONSTRAINT,
+                        description="A global field requires correction.",
+                        required_change="Correct the affected section.",
+                    )
+                ]
+            )
+        },
+    )
+    assembly = FinalPlanAssembly(
+        draft=joint.draft,
+        critique_dispositions=[
+            CritiqueDisposition(
+                critique_id="codex:C1",
+                action=CritiqueDispositionAction.APPLIED,
+                rationale="Applied without declaring what changed.",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="require task, section, or variant targets"):
+        validate_response(request, assembly)
 
 
 def test_direct_source_is_not_repeated_in_the_prompt(tmp_path: Path) -> None:

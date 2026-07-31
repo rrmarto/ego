@@ -11,9 +11,9 @@ from ego.models import (
     PlanAudit,
     PlanCoverage,
     PlanCoverageDisposition,
-    PlanCritiqueCategory,
     PlanCritiqueSeverity,
     PlanDraft,
+    PlanSection,
     PlanVariant,
 )
 
@@ -93,6 +93,7 @@ def qualify_audit(participant_id: str, audit: PlanAudit) -> PlanAudit:
 def normalize_final_assembly(
     assembly: FinalPlanAssembly | None,
     audits: dict[str, PlanAudit],
+    joint: JointPlanDraft | None = None,
 ) -> tuple[FinalPlanAssembly | None, list[str]]:
     if assembly is None:
         return None, []
@@ -102,6 +103,11 @@ def normalize_final_assembly(
         for item in audit.criticisms
     }
     target_ids = {task.id for task in assembly.draft.tasks}
+    joint_task_ids: set[str] = set()
+    if joint is not None:
+        joint_task_ids = {task.id for task in joint.draft.tasks}
+        target_ids.update(joint_task_ids)
+    variant_ids = set() if joint is None else {item.id for item in joint.variants}
     dispositions: list[CritiqueDisposition] = []
     warnings: list[str] = []
     seen: set[str] = set()
@@ -114,22 +120,63 @@ def normalize_final_assembly(
         if item.critique_id in seen:
             continue
         seen.add(item.critique_id)
+        critique = expected[item.critique_id]
         unknown_targets = sorted(set(item.target_task_ids) - target_ids)
+        unauthorized_tasks = sorted(
+            set(item.target_task_ids)
+            & joint_task_ids
+            - set(critique.candidate_task_ids)
+        )
+        unauthorized_sections = sorted(
+            set(item.target_sections) - set(critique.candidate_sections)
+        )
+        unknown_variants = sorted(
+            set(item.resolved_variant_ids)
+            - variant_ids.intersection(critique.candidate_variant_ids)
+        )
         missing_target = (
             item.action is CritiqueDispositionAction.APPLIED
             and not item.target_task_ids
+            and not item.target_sections
+            and not item.resolved_variant_ids
         )
-        if unknown_targets or missing_target:
+        invalid_resolution = (
+            item.action is not CritiqueDispositionAction.APPLIED
+            and bool(item.resolved_variant_ids)
+        )
+        if (
+            unknown_targets
+            or unauthorized_tasks
+            or unauthorized_sections
+            or unknown_variants
+            or missing_target
+            or invalid_resolution
+        ):
             warnings.append(
-                f"Final disposition for {item.critique_id} did not map to valid target tasks."
+                f"Final disposition for {item.critique_id} did not map to valid targets."
             )
+            invalid_reasons = [
+                *(f"task {value}" for value in unknown_targets),
+                *(f"unauthorized task {value}" for value in unauthorized_tasks),
+                *(
+                    f"unauthorized section {value.value}"
+                    for value in unauthorized_sections
+                ),
+                *(f"variant {value}" for value in unknown_variants),
+            ]
+            if missing_target:
+                invalid_reasons.append("no applied target")
+            if invalid_resolution:
+                invalid_reasons.append("variant resolved by a non-applied disposition")
             item = item.model_copy(
                 update={
                     "action": CritiqueDispositionAction.VARIANT,
                     "target_task_ids": [],
+                    "target_sections": [],
+                    "resolved_variant_ids": [],
                     "rationale": (
-                        f"{item.rationale} Invalid target tasks: "
-                        + (", ".join(unknown_targets) if unknown_targets else "none")
+                        f"{item.rationale} Invalid targets: "
+                        + ", ".join(invalid_reasons)
                     ),
                 }
             )
@@ -218,14 +265,15 @@ def blocking_issues(
             for critique_id in applied_critique_ids
             for task_id in dispositions[critique_id].target_task_ids
         }
+        authorized_tasks = targeted_joint_tasks | disposition_targets
         for task_id, task in joint_tasks.items():
-            if task_id not in final_tasks and task_id not in targeted_joint_tasks:
+            if task_id not in final_tasks and task_id not in authorized_tasks:
                 issues.append(
                     f"Final assembly removed untouched joint task {task_id}."
                 )
             elif (
                 task_id in final_tasks
-                and task_id not in targeted_joint_tasks
+                and task_id not in authorized_tasks
                 and final_tasks[task_id] != task
             ):
                 issues.append(
@@ -235,56 +283,20 @@ def blocking_issues(
             issues.append(
                 f"Final assembly added task {task_id} without an applied critique."
             )
-        applied_categories = {
-            critiques[critique_id].category
+        authorized_sections = {
+            section
             for critique_id in applied_critique_ids
+            for section in dispositions[critique_id].target_sections
         }
-        if (
-            assembly.draft.title != joint.draft.title
-            or assembly.draft.objective != joint.draft.objective
-        ):
-            issues.append("Final assembly changed the joint title or objective.")
-        _guard_plan_section(
-            issues,
-            "scope, affected areas, or open questions",
-            [
-                *joint.draft.scope,
-                *joint.draft.affected_areas,
-                *joint.draft.open_questions,
-            ],
-            [
-                *assembly.draft.scope,
-                *assembly.draft.affected_areas,
-                *assembly.draft.open_questions,
-            ],
-            applied_categories
-            & {
-                PlanCritiqueCategory.OMISSION,
-                PlanCritiqueCategory.INCORRECT_ADDITION,
-                PlanCritiqueCategory.VARIANT,
-            },
-        )
-        _guard_plan_section(
-            issues,
-            "constraints or non-goals",
-            [*joint.draft.constraints, *joint.draft.non_goals],
-            [*assembly.draft.constraints, *assembly.draft.non_goals],
-            applied_categories & {PlanCritiqueCategory.CONSTRAINT},
-        )
-        _guard_plan_section(
-            issues,
-            "validation",
-            joint.draft.validation,
-            assembly.draft.validation,
-            applied_categories & {PlanCritiqueCategory.VALIDATION},
-        )
-        _guard_plan_section(
-            issues,
-            "risks",
-            joint.draft.risks,
-            assembly.draft.risks,
-            applied_categories & {PlanCritiqueCategory.RISK},
-        )
+        for section in PlanSection:
+            if (
+                getattr(assembly.draft, section.value)
+                != getattr(joint.draft, section.value)
+                and section not in authorized_sections
+            ):
+                issues.append(
+                    f"Final assembly changed {section.value} without an applied critique."
+                )
     issues.extend(f"Variant {item.id} requires resolution: {item.question}" for item in variants)
     return _unique(issues)
 
@@ -292,10 +304,13 @@ def blocking_issues(
 def merge_variants(
     first: list[PlanVariant],
     second: list[PlanVariant],
+    resolved_variant_ids: Iterable[str] = (),
 ) -> list[PlanVariant]:
+    resolved = set(resolved_variant_ids)
     variants: dict[str, PlanVariant] = {}
     for item in [*first, *second]:
-        variants.setdefault(item.id, item)
+        if item.id not in resolved:
+            variants.setdefault(item.id, item)
     return list(variants.values())
 
 
@@ -319,17 +334,6 @@ def apply_source_contract(
             ),
         }
     )
-
-
-def _guard_plan_section(
-    issues: list[str],
-    label: str,
-    joint_value: list[str],
-    final_value: list[str],
-    authorizing_categories: set[PlanCritiqueCategory],
-) -> None:
-    if joint_value != final_value and not authorizing_categories:
-        issues.append(f"Final assembly changed {label} without an applied critique.")
 
 
 def _unique(values: Iterable[str]) -> list[str]:

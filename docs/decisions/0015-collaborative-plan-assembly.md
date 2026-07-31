@@ -31,6 +31,11 @@ The workflow has four typed stages:
    different from the joint author applies compatible changes and records one
    disposition for every critique.
 
+An applied disposition explicitly names every task and plan-level section it
+changes. Removing a joint variant also requires that disposition to name the
+variant as resolved. Untargeted tasks and sections must remain equivalent in
+the typed record, and an omitted variant remains unresolved.
+
 Only the first stage may read or search the workspace. Later stages use compact
 structured context and no tools. Corrections do not repeat that context.
 
@@ -43,6 +48,11 @@ section, removes a task without an applied criticism, or adds a task not mapped
 by an applied disposition. A plan with blocking issues may be inspected or
 rejected but cannot be approved. Material choices must return to human
 resolution or a new accepted Decision source.
+
+The allowed plan-level targets are title, objective, scope, constraints,
+non-goals, affected areas, validation, risks, and open questions. This keeps
+global criticisms representable without inventing a task target and prevents a
+final assembler from rewriting unrelated sections.
 
 Independent plans, the joint candidate, audits, final assembly, variants, and
 blockers are stored in the immutable plan result. The portable artifact remains

@@ -7,6 +7,7 @@ from typing import cast
 from pydantic import BaseModel
 
 from ego.models import (
+    CritiqueDispositionAction,
     FinalPlanAssembly,
     InvestigationDraft,
     InvestigationPhase,
@@ -174,8 +175,115 @@ def _validate_plan_response(request: TurnRequest, response: BaseModel) -> None:
             "critique disposition",
         )
         _validate_unique_ids([item.id for item in response.variants], "plan variant")
+        _validate_final_plan_assembly(request, response)
         return
     raise ValueError("unsupported structured Plan response")
+
+
+def _validate_final_plan_assembly(
+    request: TurnRequest,
+    response: FinalPlanAssembly,
+) -> None:
+    known_tasks = {task.id for task in response.draft.tasks}
+    known_variants: set[str] = set()
+    joint_tasks: set[str] = set()
+    if request.joint_plan is not None:
+        joint_tasks.update(task.id for task in request.joint_plan.draft.tasks)
+        known_tasks.update(joint_tasks)
+        known_variants.update(item.id for item in request.joint_plan.variants)
+    critiques = {
+        item.id: item
+        for audit in request.plan_audits.values()
+        for item in audit.criticisms
+    }
+    resolved_variants = [
+        variant_id
+        for item in response.critique_dispositions
+        for variant_id in item.resolved_variant_ids
+    ]
+    _validate_unique_ids(resolved_variants, "resolved variant")
+    unknown_tasks = sorted(
+        {
+            task_id
+            for item in response.critique_dispositions
+            for task_id in item.target_task_ids
+            if task_id not in known_tasks
+        }
+    )
+    unknown_variants = sorted(set(resolved_variants) - known_variants)
+    returned_variants = {item.id for item in response.variants}
+    conflicting_variants = sorted(set(resolved_variants) & returned_variants)
+    untargeted = [
+        item.critique_id
+        for item in response.critique_dispositions
+        if item.action is CritiqueDispositionAction.APPLIED
+        and not item.target_task_ids
+        and not item.target_sections
+        and not item.resolved_variant_ids
+    ]
+    invalid_resolutions = [
+        item.critique_id
+        for item in response.critique_dispositions
+        if item.action is not CritiqueDispositionAction.APPLIED
+        and item.resolved_variant_ids
+    ]
+    unknown_critiques: list[str] = []
+    unauthorized_targets: list[str] = []
+    for item in response.critique_dispositions:
+        critique = critiques.get(item.critique_id)
+        if critique is None:
+            unknown_critiques.append(item.critique_id)
+            continue
+        unauthorized_targets.extend(
+            f"{item.critique_id}:task:{task_id}"
+            for task_id in (
+                set(item.target_task_ids)
+                & joint_tasks
+                - set(critique.candidate_task_ids)
+            )
+        )
+        unauthorized_targets.extend(
+            f"{item.critique_id}:section:{section.value}"
+            for section in set(item.target_sections) - set(critique.candidate_sections)
+        )
+        unauthorized_targets.extend(
+            f"{item.critique_id}:variant:{variant_id}"
+            for variant_id in (
+                set(item.resolved_variant_ids)
+                - set(critique.candidate_variant_ids)
+            )
+        )
+    errors: list[str] = []
+    if unknown_critiques:
+        errors.append(
+            "unknown critique dispositions: " + ", ".join(sorted(unknown_critiques))
+        )
+    if unknown_tasks:
+        errors.append("unknown disposition target tasks: " + ", ".join(unknown_tasks))
+    if unknown_variants:
+        errors.append("unknown resolved variants: " + ", ".join(unknown_variants))
+    if conflicting_variants:
+        errors.append(
+            "variants cannot be both resolved and returned: "
+            + ", ".join(conflicting_variants)
+        )
+    if untargeted:
+        errors.append(
+            "applied dispositions require task, section, or variant targets: "
+            + ", ".join(untargeted)
+        )
+    if invalid_resolutions:
+        errors.append(
+            "only applied dispositions may resolve variants: "
+            + ", ".join(invalid_resolutions)
+        )
+    if unauthorized_targets:
+        errors.append(
+            "disposition targets were not identified by their critiques: "
+            + ", ".join(sorted(unauthorized_targets))
+        )
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def _validate_plan_draft(
@@ -444,14 +552,20 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "Audit the joint candidate strictly against your own independent plan and the frozen "
             "sources. Report only concrete omissions, incorrect additions or merges, dependency "
             "errors, lost constraints, risks, validation gaps, or variants. Each criticism must "
-            "be self-contained and identify the required change. Return no criticism when the "
-            "joint candidate preserves your material contribution correctly."
+            "be self-contained and identify the required change. Identify affected existing "
+            "tasks in candidate_task_ids, plan-level fields in candidate_sections, and joint "
+            "variants in candidate_variant_ids. Return no criticism when the joint candidate "
+            "preserves your material contribution correctly."
         )
     return (
         "Revise the joint candidate using every audit. Return one disposition for every exact "
         "critique id. Apply compatible corrections. A material criticism that cannot be applied "
-        "must remain explicit as a variant; never discard it silently. Preserve the ids and exact "
-        "content of joint tasks not targeted by an applied criticism."
+        "must remain explicit as a variant; never discard it silently. Every applied disposition "
+        "must identify each changed task in target_task_ids, each changed plan-level field in "
+        "target_sections, and each removed joint variant in resolved_variant_ids. Return every "
+        "still-unresolved variant. Existing task, section, and variant targets must have been "
+        "identified by the corresponding critique. Preserve all tasks and plan-level fields not "
+        "explicitly targeted by an applied disposition."
     )
 
 

@@ -12,6 +12,7 @@ from ego.agents.runtime import AgentRuntime, NoParticipantsError
 from ego.events import WorkEventType
 from ego.models import (
     AcceptedDecisionPackage,
+    CritiqueDispositionAction,
     FinalPlanAssembly,
     ImplementationPlan,
     PlanFormat,
@@ -211,11 +212,23 @@ class PlanWorkflow:
             final_assembly, assembly_warnings = normalize_final_assembly(
                 final_assembly,
                 audits,
+                joint,
             )
             warnings.extend(assembly_warnings)
+            resolved_variant_ids = (
+                []
+                if final_assembly is None
+                else [
+                    variant_id
+                    for disposition in final_assembly.critique_dispositions
+                    if disposition.action is CritiqueDispositionAction.APPLIED
+                    for variant_id in disposition.resolved_variant_ids
+                ]
+            )
             variants = merge_variants(
                 joint.variants,
                 [] if final_assembly is None else final_assembly.variants,
+                resolved_variant_ids,
             )
             draft = joint.draft if final_assembly is None else final_assembly.draft
             unresolved = blocking_issues(
