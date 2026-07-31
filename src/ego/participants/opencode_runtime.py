@@ -98,6 +98,7 @@ class OpenCodeRuntime:
         if self.model_override:
             config["model"] = self.model_override
         permissions = _permissions(request)
+        workspace_instruction = _workspace_instruction(request)
         config.update(
             {
                 "agent": {
@@ -105,7 +106,7 @@ class OpenCodeRuntime:
                         "description": "Read-only workflow participant for Ego",
                         "mode": "primary",
                         "prompt": (
-                            "Inspect only the target workspace named in the user prompt. "
+                            f"{workspace_instruction}"
                             "Use direct reads and narrowly targeted searches. Never enumerate the "
                             "whole workspace or inspect generated, dependency, VCS, or cache "
                             "directories unless the question specifically requires it. Never edit "
@@ -175,16 +176,7 @@ def _permissions(request: TurnRequest | None) -> dict[str, object]:
         "webfetch": "deny",
         "websearch": "deny",
     }
-    decision_read = request is not None and request.phase in {
-        Phase.INDEPENDENT,
-        Phase.PEER_REVIEW,
-    }
-    read_only_workflow = (
-        request is not None
-        and isinstance(request.phase, (InvestigationPhase, PlanPhase))
-        and request.tool_policy.read
-    )
-    if not decision_read and not read_only_workflow:
+    if not _request_allows_reads(request):
         return permissions
     assert request is not None
     workspace = str(Path(request.workspace).resolve())
@@ -203,6 +195,31 @@ def _permissions(request: TurnRequest | None) -> dict[str, object]:
         }
     )
     return permissions
+
+
+def _workspace_instruction(request: TurnRequest | None) -> str:
+    if not _request_allows_reads(request):
+        return "Do not inspect any workspace in this phase. "
+    assert request is not None
+    workspace = str(Path(request.workspace).resolve())
+    return (
+        "Your process directory is an intentionally empty isolation directory, not the target "
+        f"workspace. The only target workspace is {workspace}. Every read, list, glob, or grep "
+        f"call must set its path to {workspace} or a descendant before the first tool call. "
+        "Never inspect the process directory, filesystem root, or infer another workspace. "
+        "Return citations and affected files relative to the target workspace. "
+    )
+
+
+def _request_allows_reads(request: TurnRequest | None) -> bool:
+    if request is None:
+        return False
+    if request.phase in {Phase.INDEPENDENT, Phase.PEER_REVIEW}:
+        return True
+    return (
+        isinstance(request.phase, (InvestigationPhase, PlanPhase))
+        and request.tool_policy.read
+    )
 
 
 def _configured_model(config: dict[str, object]) -> str | None:

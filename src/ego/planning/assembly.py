@@ -97,6 +97,32 @@ def normalize_final_assembly(
 ) -> tuple[FinalPlanAssembly | None, list[str]]:
     if assembly is None:
         return None, []
+    warnings: list[str] = []
+    variant_questions = {item.question for item in assembly.variants}
+    joint_open_questions = set() if joint is None else set(joint.draft.open_questions)
+    duplicate_variant_questions = [
+        question
+        for question in assembly.draft.open_questions
+        if question in variant_questions and question not in joint_open_questions
+    ]
+    if duplicate_variant_questions:
+        assembly = assembly.model_copy(
+            update={
+                "draft": assembly.draft.model_copy(
+                    update={
+                        "open_questions": [
+                            question
+                            for question in assembly.draft.open_questions
+                            if question not in duplicate_variant_questions
+                        ]
+                    }
+                )
+            }
+        )
+        warnings.append(
+            "Final assembly repeated variant questions in open_questions; "
+            "Ego normalized the duplicate representation."
+        )
     expected = {
         item.id: item
         for audit in audits.values()
@@ -109,7 +135,6 @@ def normalize_final_assembly(
         target_ids.update(joint_task_ids)
     variant_ids = set() if joint is None else {item.id for item in joint.variants}
     dispositions: list[CritiqueDisposition] = []
-    warnings: list[str] = []
     seen: set[str] = set()
     for item in assembly.critique_dispositions:
         if item.critique_id not in expected:

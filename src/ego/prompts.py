@@ -229,6 +229,7 @@ def _validate_final_plan_assembly(
     )
     unknown_variants = sorted(set(resolved_variants) - known_variants)
     returned_variants = {item.id for item in response.variants}
+    returned_variant_questions = {item.question for item in response.variants}
     conflicting_variants = sorted(set(resolved_variants) & returned_variants)
     untargeted = [
         item.critique_id
@@ -268,6 +269,7 @@ def _validate_final_plan_assembly(
         set() if request.joint_plan is None else set(request.joint_plan.draft.open_questions)
     )
     added_open_questions = set(response.draft.open_questions) - joint_open_questions
+    duplicated_variant_questions = sorted(added_open_questions & returned_variant_questions)
     introduced_questions = [
         question
         for item in response.critique_dispositions
@@ -327,7 +329,8 @@ def _validate_final_plan_assembly(
         )
     if len(set(introduced_questions)) != len(introduced_questions):
         errors.append("introduced open questions must be attributed exactly once")
-    if set(introduced_questions) != added_open_questions:
+    attributable_open_questions = added_open_questions - set(duplicated_variant_questions)
+    if set(introduced_questions) != attributable_open_questions:
         errors.append("every added open question must be attributed to one disposition")
     if errors:
         raise ValueError("; ".join(errors))
@@ -618,8 +621,11 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
     return (
         "Revise the joint candidate using every audit. Return one disposition for every exact "
         "critique id. Mark a correction applied only when it is fully incorporated. A material "
-        "criticism that remains an open question must be an explicit variant, never an applied "
-        "disposition or silent deferral. Attribute every newly added non-material question "
+        "criticism that remains unresolved must be an explicit variant, never an applied "
+        "disposition or silent deferral. Put an unresolved question only in variants: do not "
+        "copy it into draft.open_questions or introduced_open_questions because Ego projects "
+        "returned variants into the final plan after validation. Attribute every newly added "
+        "non-material question "
         "exactly once in introduced_open_questions on its applied open_questions disposition. "
         "Every applied disposition "
         "must identify each changed task in target_task_ids, each changed plan-level field in "

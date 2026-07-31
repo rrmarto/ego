@@ -204,6 +204,10 @@ def test_opencode_command_uses_default_model_in_an_isolated_runtime(
     assert runtime_config["permission"]["external_directory"][
         str(workspace.resolve()) + "/**"
     ] == "allow"
+    agent_prompt = runtime_config["agent"]["ego"]["prompt"]
+    assert "intentionally empty isolation directory" in agent_prompt
+    assert f"The only target workspace is {workspace.resolve()}" in agent_prompt
+    assert "before the first tool call" in agent_prompt
     assert runtime_auth.read_text(encoding="utf-8") == (
         '{"custom":{"type":"api","key":"secret"}}'
     )
@@ -259,6 +263,9 @@ def test_opencode_plan_tools_are_local_read_only(
     assert permissions["bash"] == "deny"
     assert permissions["websearch"] == "deny"
     assert permissions["task"] == "deny"
+    agent_prompt = runtime_config["agent"]["ego"]["prompt"]
+    assert f"The only target workspace is {workspace.resolve()}" in agent_prompt
+    assert "Every read, list, glob, or grep call must set its path" in agent_prompt
 
     participant.cleanup_command(command)
     assert not runtime_home.exists()
@@ -587,6 +594,9 @@ def test_opencode_explicit_model_remains_an_optional_override(
     assert runtime_config["model"] == "github-copilot/gpt-5.4-mini"
     assert runtime_config["permission"]["read"] == "deny"
     assert runtime_config["permission"]["glob"] == "deny"
+    assert "Do not inspect any workspace in this phase" in runtime_config["agent"]["ego"][
+        "prompt"
+    ]
     participant.cleanup_command(command)
 
 

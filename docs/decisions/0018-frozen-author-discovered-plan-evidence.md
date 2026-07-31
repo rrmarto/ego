@@ -33,6 +33,14 @@ reinspect and repair rejected evidence without repeating the full seed context.
 Validation errors identify the rejected path and range and state whether the
 author must remove an unsupported symbol or cite the fragment that contains it.
 
+Final assembly represents every unresolved material criticism as a
+`PlanVariant`. Its question should not also be copied into the draft's open
+questions or a critique disposition: after structured validation, Ego projects
+returned variants into the final plan. If a provider nevertheless repeats the
+same question in the draft, Ego removes that structurally redundant copy
+deterministically instead of spending a corrective model call. A genuinely new
+non-variant open question still requires an applied, attributed disposition.
+
 After independent planning, Ego validates every citation against the canonical
 workspace, hashes it, assigns a stable `CTX` identifier, deduplicates identical
 ranges, and freezes the union in memory. Existing seed evidence explicitly used

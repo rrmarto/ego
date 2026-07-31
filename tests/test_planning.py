@@ -684,6 +684,64 @@ def test_material_critique_cannot_be_applied_as_a_new_open_question(
     )
 
 
+def test_final_assembly_keeps_unresolved_question_only_as_variant(
+    tmp_path: Path,
+) -> None:
+    joint = JointPlanDraft(draft=PlanParticipant._draft("Joint candidate."))
+    question = "How should the default expert inspection expose the summary?"
+    critique = PlanCritique(
+        id="codex:C1",
+        severity=PlanCritiqueSeverity.MATERIAL,
+        category=PlanCritiqueCategory.VARIANT,
+        description="The default inspection contract remains unresolved.",
+        required_change="Preserve the unresolved behavior as a variant.",
+        candidate_task_ids=["T1"],
+        candidate_sections=[PlanSection.OPEN_QUESTIONS],
+    )
+    audits = {"codex": PlanAudit(criticisms=[critique])}
+    disposition = CritiqueDisposition(
+        critique_id="codex:C1",
+        action=CritiqueDispositionAction.VARIANT,
+        target_task_ids=["T1"],
+        target_sections=[PlanSection.OPEN_QUESTIONS],
+        rationale="The sources do not resolve the public contract.",
+    )
+    variant = PlanVariant(
+        id="V1",
+        question=question,
+        options=["Keep expert output.", "Change the default presentation."],
+        source_task_ids=["codex:T1"],
+    )
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.FINAL_ASSEMBLY,
+        question="Assemble the final plan.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        joint_plan=joint,
+        plan_audits=audits,
+    )
+    duplicated = FinalPlanAssembly(
+        draft=joint.draft.model_copy(update={"open_questions": [question]}),
+        critique_dispositions=[disposition],
+        variants=[variant],
+    )
+
+    validate_response(request, duplicated)
+
+    prompt = build_prompt(request)
+    assert "Put an unresolved question only in variants" in prompt
+    assert "Ego projects returned variants into the final plan" in prompt
+
+    normalized, warnings = normalize_final_assembly(duplicated, audits, joint)
+
+    assert normalized is not None
+    assert normalized.draft.open_questions == []
+    assert normalized.variants == [variant]
+    assert any("normalized the duplicate representation" in item for item in warnings)
+
+
 def test_advisory_open_question_is_explicitly_attributed(tmp_path: Path) -> None:
     joint = JointPlanDraft(draft=PlanParticipant._draft("Joint candidate."))
     question = "Which fixture name best matches the existing test style?"

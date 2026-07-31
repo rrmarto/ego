@@ -36,6 +36,14 @@ OpenCode runs with `--pure` from a neutral temporary project directory. During
 independent reasoning and peer review it may read, list, glob, and grep only the
 target workspace. Later phases receive no tools.
 
+Because the neutral project is intentionally empty, each per-call Ego agent
+configuration names the canonical target root and requires every path-bearing
+tool call to use that root or a descendant. This adapter-owned instruction has
+higher priority than the task prompt. The external-directory permission and
+Seatbelt profile independently enforce the same target boundary; changing the
+OpenCode project root to the user workspace remains prohibited because project
+configuration would then enter the runtime.
+
 Ego does not pass `--model` by default. OpenCode resolves its model using its
 normal hierarchy: global configuration, recent selection, then internal
 priority. An explicit `[participants.opencode].model` remains an optional Ego

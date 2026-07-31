@@ -251,6 +251,12 @@ resolution remains blocking. This lets global criticisms be applied without
 fake task targets while preserving every untouched section.
 An applied material criticism must be fully resolved: adding a new open question
 is rejected and the unresolved issue must remain a blocking variant.
+The assembler returns a variant question only in `variants`; it does not also
+copy it into `draft.open_questions` or `introduced_open_questions`. Ego adds
+unresolved variant questions to the exported draft after validation. A provider
+duplicate in `draft.open_questions` is removed deterministically before
+persistence, avoiding a corrective model call; non-variant questions retain
+their strict attribution requirements.
 
 The full initial `WorkspaceContext` is sent only to independent planning.
 Later stages receive its manifest, project map, frozen evidence contents,
