@@ -326,6 +326,9 @@ class WorkspaceContextManifest(BaseModel):
     workspace_fingerprint: str
     evidence: list[WorkspaceContextEvidenceReference] = Field(default_factory=list)
     enrichment_evidence_ids: list[str] = Field(default_factory=list)
+    enrichment_required_anchors: list[str] = Field(default_factory=list)
+    enrichment_required_definition_anchors: list[str] = Field(default_factory=list)
+    enrichment_unresolved_anchors: list[str] = Field(default_factory=list)
     enrichment_bytes_used: int = Field(default=0, ge=0)
     enrichment_byte_budget: int = Field(default=0, ge=0)
     enrichment_truncated: bool = False
@@ -453,6 +456,7 @@ class CritiqueDisposition(BaseModel):
     target_task_ids: list[str] = Field(default_factory=list)
     target_sections: list[PlanSection] = Field(default_factory=list)
     resolved_variant_ids: list[str] = Field(default_factory=list)
+    introduced_open_questions: list[str] = Field(default_factory=list)
     rationale: str
 
 

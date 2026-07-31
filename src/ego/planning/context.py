@@ -461,6 +461,7 @@ async def _git_grep(workspace: Path, terms: list[str]) -> set[Path]:
         "-C",
         str(workspace),
         "grep",
+        "-F",
         "-I",
         "-i",
         "-l",

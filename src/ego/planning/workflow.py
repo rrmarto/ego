@@ -257,6 +257,14 @@ class PlanWorkflow:
                 missing_audits,
                 variants,
             )
+            if collaborative_context.manifest.enrichment_unresolved_anchors:
+                unresolved.append(
+                    "Adaptive workspace evidence omitted required technical anchors: "
+                    + ", ".join(
+                        collaborative_context.manifest.enrichment_unresolved_anchors
+                    )
+                    + "."
+                )
             try:
                 stale_evidence_ids = await stale_workspace_evidence_ids(
                     request.workspace,

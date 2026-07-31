@@ -17,8 +17,10 @@ from ego.models import (
     PeerReviewBundle,
     Phase,
     PlanAudit,
+    PlanCritiqueSeverity,
     PlanDraft,
     PlanPhase,
+    PlanSection,
     Position,
     Synthesis,
     TurnRequest,
@@ -253,6 +255,34 @@ def _validate_final_plan_assembly(
                 - set(critique.candidate_variant_ids)
             )
         )
+    joint_open_questions = (
+        set()
+        if request.joint_plan is None
+        else set(request.joint_plan.draft.open_questions)
+    )
+    added_open_questions = set(response.draft.open_questions) - joint_open_questions
+    introduced_questions = [
+        question
+        for item in response.critique_dispositions
+        for question in item.introduced_open_questions
+    ]
+    materially_deferred = sorted(
+        item.critique_id
+        for item in response.critique_dispositions
+        if item.action is CritiqueDispositionAction.APPLIED
+        and (critique := critiques.get(item.critique_id)) is not None
+        and critique.severity is PlanCritiqueSeverity.MATERIAL
+        and item.introduced_open_questions
+    )
+    invalid_question_targets = sorted(
+        item.critique_id
+        for item in response.critique_dispositions
+        if item.introduced_open_questions
+        and (
+            item.action is not CritiqueDispositionAction.APPLIED
+            or PlanSection.OPEN_QUESTIONS not in item.target_sections
+        )
+    )
     errors: list[str] = []
     if unknown_critiques:
         errors.append(
@@ -281,6 +311,23 @@ def _validate_final_plan_assembly(
         errors.append(
             "disposition targets were not identified by their critiques: "
             + ", ".join(sorted(unauthorized_targets))
+        )
+    if materially_deferred:
+        errors.append(
+            "material critiques cannot be marked applied by adding open questions; "
+            "return an explicit variant instead: "
+            + ", ".join(materially_deferred)
+        )
+    if invalid_question_targets:
+        errors.append(
+            "introduced open questions require an applied open_questions target: "
+            + ", ".join(invalid_question_targets)
+        )
+    if len(set(introduced_questions)) != len(introduced_questions):
+        errors.append("introduced open questions must be attributed exactly once")
+    if set(introduced_questions) != added_open_questions:
+        errors.append(
+            "every added open question must be attributed to one disposition"
         )
     if errors:
         raise ValueError("; ".join(errors))
@@ -558,13 +605,17 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
             "be self-contained and identify the required change. Identify affected existing "
             "tasks in candidate_task_ids, plan-level fields in candidate_sections, and joint "
             "variants in candidate_variant_ids. Check technical claims against supplied adaptive "
-            "evidence and flag contradictions or obsolete open questions. Return no criticism "
+            "evidence and flag contradictions or obsolete open questions. Treat an unresolved "
+            "choice that affects correctness as material, not advisory. Return no criticism "
             "when the joint candidate preserves your material contribution correctly."
         )
     return (
         "Revise the joint candidate using every audit. Return one disposition for every exact "
-        "critique id. Apply compatible corrections. A material criticism that cannot be applied "
-        "must remain explicit as a variant; never discard it silently. Every applied disposition "
+        "critique id. Mark a correction applied only when it is fully incorporated. A material "
+        "criticism that remains an open question must be an explicit variant, never an applied "
+        "disposition or silent deferral. Attribute every newly added non-material question "
+        "exactly once in introduced_open_questions on its applied open_questions disposition. "
+        "Every applied disposition "
         "must identify each changed task in target_task_ids, each changed plan-level field in "
         "target_sections, and each removed joint variant in resolved_variant_ids. Return every "
         "still-unresolved variant. Existing task, section, and variant targets must have been "

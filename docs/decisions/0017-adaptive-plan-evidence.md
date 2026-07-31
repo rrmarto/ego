@@ -35,6 +35,21 @@ and other consumers. Multiple fragments from one file are allowed so a distant
 definition and consumer can coexist. Sensitive, generated, symlinked,
 oversized, binary, and out-of-workspace paths retain ADR-0016 exclusions.
 
+Technical identifiers appearing in author open questions are required gap
+anchors. Ego reserves a bounded round-robin quota for every author before
+ranking shared signals, searches their repository locations explicitly, and
+prioritizes fragments that cover them. Exact identifier boundaries prevent a
+substring such as `evidence_count` from being mistaken for
+`valid_evidence_count`. When a class, function, type, or variable definition
+exists, the definition and useful following lines are required instead of a
+mere call site. Incidental prose in Markdown does not make an occurrence-only
+anchor a runtime requirement, although mandatory and query-relevant documents
+remain available through the initial context. A required anchor that exists in
+the runtime workspace but cannot fit
+the adaptive evidence budget is recorded as unresolved and deterministically
+blocks Plan approval. Nonexistent identifiers may denote new code and therefore
+do not block merely because search returns no location.
+
 The adaptive pass has independent fixed limits for anchors, files, fragments
 per file, fragment lines, per-call bytes, and aggregate later-stage prompt
 bytes. Its evidence budget shrinks as the participant count grows so repeating
@@ -62,6 +77,8 @@ historical manifests remain readable through defaulted model fields.
 
 - Shared blind spots discovered in independent plans can be checked before
   synthesis without another model round.
+- One verbose author or a large set of repeated identifiers cannot crowd every
+  explicit evidence gap from another author out of adaptive retrieval.
 - Distant symbols in one file and related definitions, callers, tests, and
   contracts in other files can be supplied together.
 - Model-suggested paths cannot escape the existing safe catalog or expand

@@ -144,6 +144,10 @@ def normalize_final_assembly(
             item.action is not CritiqueDispositionAction.APPLIED
             and bool(item.resolved_variant_ids)
         )
+        invalid_question_target = bool(item.introduced_open_questions) and (
+            item.action is not CritiqueDispositionAction.APPLIED
+            or PlanSection.OPEN_QUESTIONS not in item.target_sections
+        )
         if (
             unknown_targets
             or unauthorized_tasks
@@ -151,6 +155,7 @@ def normalize_final_assembly(
             or unknown_variants
             or missing_target
             or invalid_resolution
+            or invalid_question_target
         ):
             warnings.append(
                 f"Final disposition for {item.critique_id} did not map to valid targets."
@@ -168,12 +173,15 @@ def normalize_final_assembly(
                 invalid_reasons.append("no applied target")
             if invalid_resolution:
                 invalid_reasons.append("variant resolved by a non-applied disposition")
+            if invalid_question_target:
+                invalid_reasons.append("open question introduced by an invalid disposition")
             item = item.model_copy(
                 update={
                     "action": CritiqueDispositionAction.VARIANT,
                     "target_task_ids": [],
                     "target_sections": [],
                     "resolved_variant_ids": [],
+                    "introduced_open_questions": [],
                     "rationale": (
                         f"{item.rationale} Invalid targets: "
                         + ", ".join(invalid_reasons)
@@ -296,6 +304,32 @@ def blocking_issues(
             ):
                 issues.append(
                     f"Final assembly changed {section.value} without an applied critique."
+                )
+        added_open_questions = set(assembly.draft.open_questions) - set(
+            joint.draft.open_questions
+        )
+        introduced_questions = [
+            question
+            for disposition in dispositions.values()
+            for question in disposition.introduced_open_questions
+        ]
+        unattributed_questions = added_open_questions - set(introduced_questions)
+        if unattributed_questions:
+            issues.append(
+                "Final assembly added open questions without disposition attribution."
+            )
+        if len(set(introduced_questions)) != len(introduced_questions):
+            issues.append("Final assembly attributed an open question more than once.")
+        for critique_id in applied_critique_ids:
+            critique = critiques[critique_id]
+            disposition = dispositions[critique_id]
+            if (
+                critique.severity is PlanCritiqueSeverity.MATERIAL
+                and disposition.introduced_open_questions
+            ):
+                issues.append(
+                    f"Material critique {critique_id} was deferred as an open "
+                    "question instead of an explicit variant."
                 )
     issues.extend(f"Variant {item.id} requires resolution: {item.question}" for item in variants)
     return _unique(issues)

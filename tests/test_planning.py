@@ -621,6 +621,91 @@ def test_final_assembly_requires_explicit_targets_for_global_changes(
         validate_response(request, assembly)
 
 
+def test_material_critique_cannot_be_applied_as_a_new_open_question(
+    tmp_path: Path,
+) -> None:
+    joint = JointPlanDraft(draft=PlanParticipant._draft("Joint candidate."))
+    critique = PlanCritique(
+        id="codex:C1",
+        severity=PlanCritiqueSeverity.MATERIAL,
+        category=PlanCritiqueCategory.VARIANT,
+        description="The default expert behavior remains undecided.",
+        required_change="Preserve the unresolved behavior as a variant.",
+        candidate_sections=[PlanSection.OPEN_QUESTIONS],
+    )
+    audits = {"codex": PlanAudit(criticisms=[critique])}
+    assembly = FinalPlanAssembly(
+        draft=joint.draft.model_copy(
+            update={"open_questions": ["How should expert mode behave?"]}
+        ),
+        critique_dispositions=[
+            CritiqueDisposition(
+                critique_id="codex:C1",
+                action=CritiqueDispositionAction.APPLIED,
+                target_sections=[PlanSection.OPEN_QUESTIONS],
+                introduced_open_questions=["How should expert mode behave?"],
+                rationale="The issue was retained as an open question.",
+            )
+        ],
+    )
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.FINAL_ASSEMBLY,
+        question="Assemble the final plan.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        joint_plan=joint,
+        plan_audits=audits,
+    )
+
+    with pytest.raises(ValueError, match="return an explicit variant"):
+        validate_response(request, assembly)
+    assert any(
+        "deferred as an open question" in issue
+        for issue in blocking_issues(joint, audits, assembly, [], [])
+    )
+
+
+def test_advisory_open_question_is_explicitly_attributed(tmp_path: Path) -> None:
+    joint = JointPlanDraft(draft=PlanParticipant._draft("Joint candidate."))
+    question = "Which fixture name best matches the existing test style?"
+    critique = PlanCritique(
+        id="codex:C1",
+        severity=PlanCritiqueSeverity.ADVISORY,
+        category=PlanCritiqueCategory.VALIDATION,
+        description="A non-blocking fixture name can be confirmed during implementation.",
+        required_change="Record the fixture naming question.",
+        candidate_sections=[PlanSection.OPEN_QUESTIONS],
+    )
+    audits = {"codex": PlanAudit(criticisms=[critique])}
+    assembly = FinalPlanAssembly(
+        draft=joint.draft.model_copy(update={"open_questions": [question]}),
+        critique_dispositions=[
+            CritiqueDisposition(
+                critique_id="codex:C1",
+                action=CritiqueDispositionAction.APPLIED,
+                target_sections=[PlanSection.OPEN_QUESTIONS],
+                introduced_open_questions=[question],
+                rationale="The advisory implementation detail is explicitly recorded.",
+            )
+        ],
+    )
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.FINAL_ASSEMBLY,
+        question="Assemble the final plan.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        joint_plan=joint,
+        plan_audits=audits,
+    )
+
+    validate_response(request, assembly)
+    assert blocking_issues(joint, audits, assembly, [], []) == []
+
+
 def test_direct_source_is_not_repeated_in_the_prompt(tmp_path: Path) -> None:
     from ego.models import HumanPlanBrief
 

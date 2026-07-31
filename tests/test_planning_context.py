@@ -316,3 +316,84 @@ async def test_workspace_context_adaptively_recovers_distant_symbols_and_consume
     stale_ids = await stale_workspace_evidence_ids(tmp_path, enriched.manifest)
 
     assert set(models_reference_ids).issubset(stale_ids)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_context_reserves_author_gap_coverage(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "ego"
+    source.mkdir(parents=True)
+    filler = "\n".join(f"filler_{index} = {index}" for index in range(220))
+    (source / "cli.py").write_text(
+        "def render_plan(plan):\n"
+        "    return plan\n"
+        f"{filler}\n"
+        "def inspect_run(run_id):\n"
+        "    return run_id\n",
+        encoding="utf-8",
+    )
+    await _track_workspace(tmp_path)
+    builder = WorkspaceContextBuilder()
+    initial = await builder.build(
+        workspace=tmp_path,
+        question="Expose a summary in ego inspect.",
+        sources=[_source("Update ego inspect safely.")],
+        git_head=None,
+        git_status=None,
+    )
+    assert all("def render_plan" not in item.content for item in initial.evidence)
+
+    def candidate(title: str, questions: list[str]) -> PlanDraft:
+        return PlanDraft(
+            title=title,
+            objective="Update inspect without guessing missing workspace contracts.",
+            affected_areas=["src/ego/cli.py"],
+            open_questions=questions,
+            tasks=[
+                PlanTask(
+                    id="inspect",
+                    title="Update inspect",
+                    description="Preserve the existing CLI contract.",
+                    affected_paths=["src/ego/cli.py"],
+                )
+            ],
+        )
+
+    enriched = await builder.enrich(
+        workspace=tmp_path,
+        context=initial,
+        candidates={
+            "claude": candidate(
+                "Locate rendering",
+                [
+                    "Where is `render_plan` defined?",
+                    "Does MissingPresentationContract exist?",
+                    "Is HistoricalInspectSchema persisted?",
+                ],
+            ),
+            "codex": candidate(
+                "Preserve expert mode",
+                [
+                    "How does TransparencyMode.EXPERT behave?",
+                    "Does ExpertInspectPayload change?",
+                    "Is LegacyInspectOutput stable?",
+                ],
+            ),
+            "opencode": candidate(
+                "Preserve storage",
+                [
+                    "Does ImplementationPlan own the manifest?",
+                    "Is WorkspaceContextManifest optional?",
+                    "Does workspace_context_manifest default safely?",
+                ],
+            ),
+        },
+    )
+
+    adaptive = [
+        item
+        for item in enriched.evidence
+        if item.id in enriched.manifest.enrichment_evidence_ids
+    ]
+    assert "render_plan" in enriched.manifest.enrichment_required_anchors
+    assert "render_plan" not in enriched.manifest.enrichment_unresolved_anchors
+    assert any("def render_plan" in item.content for item in adaptive)

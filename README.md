@@ -357,6 +357,12 @@ disabling reads. Ego creates no context cache: only evidence hashes, paths,
 bounds, initial/adaptive identifiers, and fallback metadata survive in the
 plan.
 
+Open-question symbols receive a fair bounded quota per author. If an existing
+required symbol cannot be included, the plan is blocked rather than synthesized
+from a shared blind spot. Final assembly also cannot mark a material criticism
+as applied merely by moving it into open questions; unresolved choices remain
+explicit blocking variants.
+
 Plan then builds a rotating joint candidate and lets every original author
 audit it. Final assembly runs only when criticism exists. Ego writes `plan.md`,
 `sources.json`, and `manifest.json` below `.ego/plans/`. The participant remains

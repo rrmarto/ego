@@ -36,6 +36,14 @@ changes. Removing a joint variant also requires that disposition to name the
 variant as resolved. Untargeted tasks and sections must remain equivalent in
 the typed record, and an omitted variant remains unresolved.
 
+`applied` means that the criticism is fully incorporated. A material criticism
+cannot be marked applied by adding a new open question. If the correctness-
+affecting issue remains undecided, final assembly must return it as an explicit
+variant; response validation rejects a silent deferral and deterministic
+blocking validation protects historical or normalized records. Every new
+non-material open question is attributed exactly once to its disposition so
+the invariant is checked per criticism rather than inferred globally.
+
 Only the first stage may read or search the workspace. Later stages use compact
 structured context and no tools. Corrections do not repeat that context.
 

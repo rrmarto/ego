@@ -234,6 +234,12 @@ that candidate in parallel against its own plan, frozen sources, and the same
 adaptive evidence. If any audit contains criticism, a different rotating
 participant performs one final assembly.
 
+Open-question identifiers receive a bounded per-author quota before global
+signal ranking. Required anchors with repository matches must be present in the
+initial or adaptive evidence; otherwise the manifest records them and Plan is
+not approvable. This prevents one author's verbose plan from hiding another
+author's explicit technical gap.
+
 The joint candidate maps every qualified source task to an incorporated,
 merged, omitted, variant, or unmapped disposition. Audits and final dispositions
 also use stable qualified identifiers. Ego fills missing mappings
@@ -246,6 +252,8 @@ Final dispositions name changed task identifiers, changed plan-level sections,
 and any joint variants they resolve. A variant omitted without an explicit
 resolution remains blocking. This lets global criticisms be applied without
 fake task targets while preserving every untouched section.
+An applied material criticism must be fully resolved: adding a new open question
+is rejected and the unresolved issue must remain a blocking variant.
 
 The full initial `WorkspaceContext` is sent only to independent planning.
 Later stages receive its manifest and project map, adaptive evidence contents,
