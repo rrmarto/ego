@@ -220,6 +220,9 @@ and whole-window scoring prevent weak early matches from hiding the requested
 symbols. Every participant receives that same initial snapshot and creates an
 independent plan. The seed context never disables discovery: every independent
 author retains bounded Seatbelt-protected read, glob, grep, and search tools.
+The prompt supplies the canonical absolute workspace root for inspection even
+when an adapter executes from a neutral project; all returned paths remain
+relative to that root.
 It must cite exact lines and visible symbols for every task that affects an
 existing file. Missing, excluded, oversized, or symbol-mismatched citations
 make the structured response invalid instead of becoming an inferred path.
@@ -258,8 +261,10 @@ collaboration; drift is recorded and blocks approval instead of silently mixing
 snapshots. Each invalid structured response retains one corrective call; that
 correction receives only the prior response and validation error rather than
 repeating context. Independent Plan evidence corrections retain protected
-reads so an invalid range or symbol can be repaired; other corrections do not
-reopen tools.
+reads and receive the rejected path and range plus a precise repair action, so
+an invalid range or symbol can be repaired; other corrections do not reopen
+tools. Failed corrective output and usage are persisted with the failed call
+for diagnosis and follow the same raw-artifact cleanup lifecycle.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`

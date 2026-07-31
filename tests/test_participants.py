@@ -18,13 +18,18 @@ from ego.models import (
     InvestigationSynthesis,
     ParticipantAvailability,
     Phase,
+    PlanDraft,
     PlanPhase,
+    PlanTask,
+    PlanWorkspaceEvidence,
     Position,
     ProcessResult,
     Synthesis,
     ToolPolicy,
     TurnRequest,
     UsageMetrics,
+    WorkspaceContext,
+    WorkspaceContextManifest,
 )
 from ego.participants.claude import ClaudeParticipant
 from ego.participants.codex import CodexParticipant
@@ -334,6 +339,102 @@ async def test_investigation_correction_reuses_response_without_tools(
     ]
     assert "Repair the previous structured response" in prompts[1]
     assert '"target_participant": "unknown"' in prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_plan_evidence_correction_names_workspace_and_rejected_range(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    participant = ClaudeParticipant(ParticipantConfig(), EgoConfig())
+    source = tmp_path / "src" / "ego" / "models.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "from pydantic import BaseModel\n\nclass ImplementationPlan(BaseModel):\n    pass\n",
+        encoding="utf-8",
+    )
+    invalid = PlanDraft(
+        title="Expose plan context",
+        objective="Use the existing plan model.",
+        tasks=[
+            PlanTask(
+                id="T1",
+                title="Update the plan model",
+                description="Extend ImplementationPlan.",
+                affected_paths=["src/ego/models.py"],
+                workspace_evidence=[
+                    PlanWorkspaceEvidence(
+                        path="src/ego/models.py",
+                        line_start=1,
+                        line_end=1,
+                        explanation="ImplementationPlan definition.",
+                        symbols=["ImplementationPlan"],
+                    )
+                ],
+            )
+        ],
+    )
+    corrected = invalid.model_copy(deep=True)
+    corrected.tasks[0].workspace_evidence[0].line_start = 3
+    corrected.tasks[0].workspace_evidence[0].line_end = 4
+    responses = [invalid, corrected]
+    commands: list[list[str]] = []
+    prompts: list[str] = []
+
+    async def fake_probe() -> ParticipantAvailability:
+        return ParticipantAvailability(
+            participant_id="claude",
+            status=AvailabilityStatus.AVAILABLE,
+            binary="/usr/local/bin/claude",
+        )
+
+    async def fake_run(
+        command: list[str],
+        *,
+        stdin: str,
+        **kwargs: object,
+    ) -> ProcessResult:
+        del kwargs
+        commands.append(command)
+        prompts.append(stdin)
+        response = responses[len(commands) - 1]
+        return ProcessResult(
+            command=command,
+            returncode=0,
+            stdout=json.dumps({"structured_output": response.model_dump(mode="json")}),
+            stderr="",
+            duration_seconds=0.01,
+        )
+
+    request = TurnRequest(
+        run_id="run",
+        phase=PlanPhase.INDEPENDENT,
+        question="Expose plan context.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        tool_policy=ToolPolicy.local_read_only(),
+        workspace_context=WorkspaceContext(
+            manifest=WorkspaceContextManifest(
+                context_id="context",
+                workspace_fingerprint="a" * 64,
+                byte_budget=1024,
+            ),
+            project_map=["src/ego/models.py"],
+        ),
+    )
+    monkeypatch.setattr(participant, "probe", fake_probe)
+    monkeypatch.setattr("ego.participants.base.run_read_only", fake_run)
+
+    result = await participant.respond(request)
+
+    assert result.payload == corrected
+    assert [command[command.index("--tools") + 1] for command in commands] == [
+        "Read,Glob,Grep",
+        "Read,Glob,Grep",
+    ]
+    assert all(f"exact authorized root {tmp_path}" in prompt for prompt in prompts)
+    assert "src/ego/models.py:1-1 does not contain declared symbols" in prompts[1]
+    assert "remove unsupported symbols" in prompts[1]
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ from ego.models import (
     PlanPhase,
     PlanState,
     RunStatus,
+    UsageMetrics,
     WorkStage,
 )
 from ego.redaction import redact_sensitive_text
@@ -468,15 +469,22 @@ class Database:
         participant_id: str,
         phase: str,
         error: str | None = None,
+        raw_output: str | None = None,
+        duration_seconds: float | None = None,
+        model: str | None = None,
+        usage: UsageMetrics | None = None,
     ) -> None:
         call_id = str(uuid.uuid4())
         raw_path: Path | None = None
-        if result:
+        captured_output = result.raw_output if result else raw_output
+        if captured_output is not None:
             directory = self.paths.raw_dir / run_id
             directory.mkdir(parents=True, exist_ok=True)
             raw_path = directory / f"{call_id}.txt"
-            raw_path.write_text(redact_sensitive_text(result.raw_output), encoding="utf-8")
-        usage = result.usage if result else None
+            raw_path.write_text(redact_sensitive_text(captured_output), encoding="utf-8")
+        call_usage = result.usage if result else usage
+        call_duration = result.duration_seconds if result else duration_seconds
+        call_model = result.model if result else model
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO calls
@@ -490,13 +498,13 @@ class Database:
                     participant_id,
                     phase,
                     "completed" if result else "failed",
-                    result.duration_seconds if result else None,
-                    result.model if result else None,
-                    usage.input_tokens if usage else None,
-                    usage.output_tokens if usage else None,
-                    usage.cached_input_tokens if usage else None,
-                    usage.total_tokens if usage else None,
-                    usage.cost_usd if usage else None,
+                    call_duration,
+                    call_model,
+                    call_usage.input_tokens if call_usage else None,
+                    call_usage.output_tokens if call_usage else None,
+                    call_usage.cached_input_tokens if call_usage else None,
+                    call_usage.total_tokens if call_usage else None,
+                    call_usage.cost_usd if call_usage else None,
                     str(raw_path) if raw_path else None,
                     result.payload.model_dump_json() if result else None,
                     redact_sensitive_text(error) if error else None,
@@ -512,9 +520,9 @@ class Database:
                 {
                     "call_id": call_id,
                     "phase": phase,
-                    "duration_seconds": result.duration_seconds if result else None,
-                    "model": result.model if result else None,
-                    "usage": usage.model_dump(mode="json") if usage else None,
+                    "duration_seconds": call_duration,
+                    "model": call_model,
+                    "usage": call_usage.model_dump(mode="json") if call_usage else None,
                     "error": redact_sensitive_text(error) if error else None,
                 },
                 participant_id,

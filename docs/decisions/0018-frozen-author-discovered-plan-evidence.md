@@ -19,6 +19,9 @@ The initial `WorkspaceContext` is orientation rather than a completeness gate.
 Every independent Plan author always retains the existing Seatbelt-protected
 local read, glob, grep, and search capabilities. Web, shell, writes, plugins,
 MCP, delegation, project commands, tests, and builds remain prohibited.
+The prompt names the canonical absolute workspace root so adapters that run
+from a neutral project cannot confuse that directory with the target; emitted
+paths and citations remain relative to the target root.
 
 Every independent task that affects an existing file must cite that exact file
 through a bounded `workspace_evidence` record containing a relative path, line
@@ -27,6 +30,8 @@ Ego rejects excluded paths, invalid ranges, oversized fragments, missing
 symbols, and existing affected files without direct evidence. Normal structured
 response correction gives the independent author one focused opportunity to
 reinspect and repair rejected evidence without repeating the full seed context.
+Validation errors identify the rejected path and range and state whether the
+author must remove an unsupported symbol or cite the fragment that contains it.
 
 After independent planning, Ego validates every citation against the canonical
 workspace, hashes it, assigns a stable `CTX` identifier, deduplicates identical
@@ -60,5 +65,7 @@ readable.
 - Independent calls may consume more tokens for focused reads, but failed runs
   caused by missing context should decrease and later-stage evidence remains
   shared and bounded per citation.
+- Raw output and usage from a failed corrective attempt are retained under the
+  existing call-artifact lifecycle, so provider failures remain diagnosable.
 - Context remains ephemeral. Ego writes no cache and retains only evidence
   metadata in the exported manifest.

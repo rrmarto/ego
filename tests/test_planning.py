@@ -814,6 +814,8 @@ def test_independent_plan_evidence_correction_retains_protected_reads(
 
     assert "Reinspect only the workspace evidence rejected by validation" in prompt
     assert "Use protected read/search tools" in prompt
+    assert f"exact authorized root {tmp_path.resolve()}" in prompt
+    assert "do not infer the workspace from the provider's process directory" in prompt
     assert "Omitted on correction." in prompt
 
 

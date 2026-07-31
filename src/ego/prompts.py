@@ -511,7 +511,9 @@ def _build_plan_prompt(
             "The prebuilt context is orientation, not proof of completeness. Use protected "
             "read/search tools to verify every existing file, symbol, caller, contract, and "
             "test that materially shapes your plan. Do not use web, shell, writes, plugins, "
-            "MCP, or delegation."
+            "MCP, or delegation. Start every workspace read or search from the exact authorized "
+            f"root {request.workspace.resolve()}; do not infer the workspace from the provider's "
+            "process directory. Return affected paths and citations relative to that root."
         )
     else:
         tool_instruction = "Use only the supplied context and no tools."

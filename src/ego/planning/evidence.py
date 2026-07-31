@@ -242,7 +242,12 @@ def _citation_error(workspace: Path, citation: PlanWorkspaceEvidence) -> str | N
         )
     ]
     if missing:
-        return "cited fragment does not contain declared symbols: " + ", ".join(missing)
+        location = f"{citation.path}:{citation.line_start}-{citation.line_end}"
+        return (
+            f"{location} does not contain declared symbols: {', '.join(missing)}; "
+            "remove unsupported symbols from this citation or cite the exact fragment "
+            "that contains them"
+        )
     return None
 
 

@@ -155,6 +155,39 @@ def test_call_usage_is_persisted_and_published(database: Database, tmp_path: Pat
     assert completed.payload["usage"]["cached_input_tokens"] == 800
 
 
+def test_failed_call_retains_raw_output_and_usage(database: Database, tmp_path: Path) -> None:
+    run_id = make_run(database, tmp_path)
+    usage = UsageMetrics(
+        input_tokens=100,
+        output_tokens=20,
+        cached_input_tokens=80,
+        total_tokens=120,
+    )
+
+    database.record_call(
+        run_id,
+        None,
+        participant_id="claude",
+        phase=Phase.INDEPENDENT.value,
+        error="invalid structured response after correction",
+        raw_output='{"broken": true}',
+        duration_seconds=1.5,
+        model="claude-test",
+        usage=usage,
+    )
+
+    call = database.get_run(run_id)["calls"][0]
+    failed = database.get_run_events(run_id)[-1]
+    assert call["status"] == "failed"
+    assert call["duration_seconds"] == 1.5
+    assert call["model"] == "claude-test"
+    assert call["total_tokens"] == 120
+    raw_paths = list((database.paths.raw_dir / run_id).glob("*.txt"))
+    assert len(raw_paths) == 1
+    assert raw_paths[0].read_text(encoding="utf-8") == '{"broken": true}'
+    assert failed.payload["usage"]["total_tokens"] == 120
+
+
 def test_contested_decision_requires_a_structured_human_resolution(
     database: Database, tmp_path: Path
 ) -> None:

@@ -103,6 +103,12 @@ class AgentRuntime:
                 participant_id=participant.participant_id,
                 phase=request.phase.value,
                 error=str(error),
+                raw_output=(error.raw_output if isinstance(error, ParticipantError) else None),
+                duration_seconds=(
+                    error.duration_seconds if isinstance(error, ParticipantError) else None
+                ),
+                model=error.model if isinstance(error, ParticipantError) else None,
+                usage=error.usage if isinstance(error, ParticipantError) else None,
             )
             return None
 

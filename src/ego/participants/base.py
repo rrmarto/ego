@@ -38,7 +38,20 @@ from ego.sandbox import SandboxProbe, probe_seatbelt
 
 
 class ParticipantError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_output: str | None = None,
+        duration_seconds: float | None = None,
+        model: str | None = None,
+        usage: UsageMetrics | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.duration_seconds = duration_seconds
+        self.model = model
+        self.usage = usage
 
 
 class Participant(Protocol):
@@ -322,7 +335,13 @@ class CliParticipant(ABC):
             usage = _merge_usage(usage, self.extract_usage(process.stdout))
             if process.returncode != 0:
                 detail = process.stderr.strip() or process.stdout.strip()
-                raise ParticipantError(f"CLI exited {process.returncode}: {detail[-1000:]}")
+                raise ParticipantError(
+                    f"CLI exited {process.returncode}: {detail[-1000:]}",
+                    raw_output="\n--- correction attempt ---\n".join(raw_outputs),
+                    duration_seconds=duration,
+                    model=self.reported_model(),
+                    usage=usage,
+                )
             try:
                 parsed = self.unwrap(self.extract_json(process.stdout))
                 previous_response = parsed
@@ -351,7 +370,13 @@ class CliParticipant(ABC):
                 )
             except (ParticipantError, ValueError, json.JSONDecodeError) as error:
                 errors = str(error)
-        raise ParticipantError(f"invalid structured response after correction: {errors}")
+        raise ParticipantError(
+            f"invalid structured response after correction: {errors}",
+            raw_output="\n--- correction attempt ---\n".join(raw_outputs),
+            duration_seconds=duration,
+            model=self.reported_model(),
+            usage=usage,
+        )
 
     @staticmethod
     def schema_file(schema: dict[str, object]) -> str:

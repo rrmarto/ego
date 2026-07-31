@@ -352,4 +352,9 @@ async def test_workspace_evidence_rejects_a_symbol_cited_from_the_wrong_file(
         allow_discovered=True,
     )
 
-    assert any("does not contain declared symbols: render_plan" in item for item in errors)
+    assert any(
+        "src/ego/presentation.py:1-1 does not contain declared symbols: render_plan"
+        in item
+        for item in errors
+    )
+    assert any("remove unsupported symbols" in item for item in errors)
