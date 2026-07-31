@@ -293,6 +293,53 @@ class HumanPlanBrief(BaseModel):
 PlanSource = AcceptedDecisionPackage | HumanPlanBrief
 
 
+class WorkspaceContextEvidence(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    path: str
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    file_sha256: str
+    fragment_sha256: str
+    reason: str
+    content: str
+
+
+class WorkspaceContextEvidenceReference(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    path: str
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    file_sha256: str
+    fragment_sha256: str
+    reason: str
+
+
+class WorkspaceContextManifest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    context_id: str
+    workspace_fingerprint: str
+    evidence: list[WorkspaceContextEvidenceReference] = Field(default_factory=list)
+    omitted_paths: list[str] = Field(default_factory=list)
+    truncated: bool = False
+    sufficient: bool = False
+    fallback_reason: str | None = None
+    bytes_used: int = Field(default=0, ge=0)
+    byte_budget: int = Field(default=0, ge=0)
+
+
+class WorkspaceContext(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    manifest: WorkspaceContextManifest
+    project_map: list[str] = Field(default_factory=list)
+    evidence: list[WorkspaceContextEvidence] = Field(default_factory=list)
+
+
 class PlanTask(BaseModel):
     id: str
     title: str
@@ -300,6 +347,7 @@ class PlanTask(BaseModel):
     affected_paths: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class PlanDraft(BaseModel):
@@ -413,6 +461,7 @@ class ImplementationPlan(BaseModel):
     workspace: Path
     decision_ids: list[str]
     sources: list[PlanSource] = Field(default_factory=list)
+    workspace_context_manifest: WorkspaceContextManifest | None = None
     participant_plans: dict[str, PlanDraft] = Field(default_factory=dict)
     joint_draft: JointPlanDraft | None = None
     audits: dict[str, PlanAudit] = Field(default_factory=dict)
@@ -445,6 +494,7 @@ class TurnRequest(BaseModel):
     investigation_reviews: dict[str, list[InvestigationReview]] = Field(default_factory=dict)
     investigation_syntheses: dict[str, InvestigationSynthesis] = Field(default_factory=dict)
     plan_sources: list[PlanSource] = Field(default_factory=list)
+    workspace_context: WorkspaceContext | None = None
     plan_candidates: dict[str, PlanDraft] = Field(default_factory=dict)
     plan_author_id: str | None = None
     own_plan: PlanDraft | None = None

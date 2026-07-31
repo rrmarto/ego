@@ -28,6 +28,10 @@ from ego.planning.assembly import (
     normalize_joint_draft,
 )
 from ego.planning.collaboration import PlanCollaboration
+from ego.planning.context import (
+    WorkspaceContextBuilder,
+    fallback_workspace_context,
+)
 from ego.planning.sources import MAX_PLAN_BRIEF_CHARS, resolve_plan_sources
 from ego.storage import Database
 from ego.workspace import observe_git
@@ -76,11 +80,13 @@ class PlanWorkflow:
         database: Database,
         participants: dict[str, Participant],
         writer: PlanArtifactWriter | None = None,
+        context_builder: WorkspaceContextBuilder | None = None,
     ) -> None:
         self.database = database
         self.runtime = AgentRuntime(database, participants)
         self.collaboration = PlanCollaboration(self.runtime)
         self.writer = writer or PlanArtifactWriter()
+        self.context_builder = context_builder or WorkspaceContextBuilder()
 
     async def plan(self, request: PlanInput) -> PlanOutcome:
         if request.format is not PlanFormat.MARKDOWN:
@@ -100,6 +106,23 @@ class PlanWorkflow:
         ]
         decision_ids = [source.decision_id for source in decisions]
         git_start = await observe_git(request.workspace)
+        try:
+            workspace_context = await self.context_builder.build(
+                workspace=request.workspace,
+                question=request.question,
+                sources=sources,
+                git_head=git_start.head,
+                git_status=git_start.status,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            workspace_context = fallback_workspace_context(
+                question=request.question,
+                git_head=git_start.head,
+                git_status=git_start.status,
+                reason=f"context builder failed ({type(error).__name__})",
+            )
         run_id = self.database.create_run(
             command=request.command,
             question=request.question,
@@ -121,6 +144,7 @@ class PlanWorkflow:
                 run_id,
                 request,
                 sources,
+                workspace_context,
                 active,
             )
             if len(candidates) < 2:
@@ -132,11 +156,22 @@ class PlanWorkflow:
                 for participant_id in active
                 if participant_id not in candidates
             ]
+            if not workspace_context.manifest.sufficient:
+                warnings.append(
+                    "Workspace context was insufficient; independent participants retained "
+                    "protected workspace reads"
+                    + (
+                        f": {workspace_context.manifest.fallback_reason}."
+                        if workspace_context.manifest.fallback_reason
+                        else "."
+                    )
+                )
             joint_author, final_author = self.runtime.rotating_pair(run_id, candidates)
             joint = await self.collaboration.joint_draft(
                 run_id,
                 request,
                 sources,
+                workspace_context,
                 candidates,
                 joint_author,
                 active[joint_author],
@@ -147,6 +182,7 @@ class PlanWorkflow:
                 run_id,
                 request,
                 sources,
+                workspace_context,
                 candidates,
                 joint,
                 active,
@@ -161,6 +197,7 @@ class PlanWorkflow:
                     run_id,
                     request,
                     sources,
+                    workspace_context,
                     joint,
                     audits,
                     final_author,
@@ -205,6 +242,7 @@ class PlanWorkflow:
                 participant_ids=sorted(candidates),
                 variants=variants,
                 blocking_issues=unresolved,
+                workspace_context_manifest=workspace_context.manifest,
             )
             git_end = await observe_git(request.workspace)
             if git_start.head != git_end.head:
@@ -219,6 +257,7 @@ class PlanWorkflow:
                 workspace=request.workspace,
                 decision_ids=decision_ids,
                 sources=sources,
+                workspace_context_manifest=workspace_context.manifest,
                 participant_plans=candidates,
                 joint_draft=joint,
                 audits=audits,

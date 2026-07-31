@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ego.models import PlanDraft, PlanSource, PlanVariant
+from ego.models import PlanDraft, PlanSource, PlanVariant, WorkspaceContextManifest
 
 ARTIFACT_FILES = frozenset({"plan.md", "sources.json", "manifest.json"})
 
@@ -42,6 +42,7 @@ class PlanArtifactWriter:
         participant_ids: list[str] | None = None,
         variants: list[PlanVariant] | None = None,
         blocking_issues: list[str] | None = None,
+        workspace_context_manifest: WorkspaceContextManifest | None = None,
     ) -> WrittenPlanArtifact:
         root = workspace / ".ego" / "plans"
         target = self._target(root, workspace, draft.title, plan_id, destination)
@@ -76,7 +77,7 @@ class PlanArtifactWriter:
                 "sources.json": _sha256(sources_path.read_bytes()),
             }
             manifest = {
-                "artifact_version": 3,
+                "artifact_version": 4,
                 "plan_id": plan_id,
                 "run_id": run_id,
                 "state": "draft",
@@ -84,6 +85,11 @@ class PlanArtifactWriter:
                 "sources": [_source_reference(item) for item in sources],
                 "participants": participant_ids or [],
                 "blocking_issues": blocking_issues or [],
+                "workspace_context": (
+                    workspace_context_manifest.model_dump(mode="json")
+                    if workspace_context_manifest is not None
+                    else None
+                ),
                 "workspace": str(workspace),
                 "workspace_git_head": workspace_git_head,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -213,6 +219,12 @@ def render_markdown(
         lines.extend((f"### {task.id}: {task.title}", "", task.description))
         _list_section(lines, "Affected paths", [f"`{value}`" for value in task.affected_paths], 4)
         _list_section(lines, "Depends on", [f"`{value}`" for value in task.depends_on], 4)
+        _list_section(
+            lines,
+            "Workspace evidence",
+            [f"`{value}`" for value in task.evidence_ids],
+            4,
+        )
         _list_section(lines, "Acceptance criteria", task.acceptance_criteria, 4)
     _list_section(lines, "Validation", draft.validation)
     _list_section(lines, "Risks", draft.risks)

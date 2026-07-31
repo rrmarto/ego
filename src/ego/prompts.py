@@ -54,7 +54,7 @@ def response_schema(phase: WorkStage) -> dict[str, object]:
 
 def validate_response(request: TurnRequest, response: BaseModel) -> None:
     if isinstance(request.phase, PlanPhase):
-        _validate_plan_response(response)
+        _validate_plan_response(request, response)
         return
     if isinstance(request.phase, InvestigationPhase):
         _validate_investigation_response(request, response)
@@ -144,12 +144,20 @@ def _validate_synthesis_response(request: TurnRequest, response: Synthesis) -> N
         raise ValueError("; ".join(errors))
 
 
-def _validate_plan_response(response: BaseModel) -> None:
+def _validate_plan_response(request: TurnRequest, response: BaseModel) -> None:
+    evidence_ids = (
+        {
+            item.id
+            for item in request.workspace_context.manifest.evidence
+        }
+        if request.workspace_context is not None
+        else set()
+    )
     if isinstance(response, PlanDraft):
-        _validate_plan_draft(response)
+        _validate_plan_draft(response, evidence_ids=evidence_ids)
         return
     if isinstance(response, JointPlanDraft):
-        _validate_plan_draft(response.draft)
+        _validate_plan_draft(response.draft, evidence_ids=evidence_ids)
         _validate_unique_ids(
             [item.source_task_id for item in response.coverage],
             "plan coverage source task",
@@ -160,7 +168,7 @@ def _validate_plan_response(response: BaseModel) -> None:
         _validate_unique_ids([item.id for item in response.criticisms], "plan critique")
         return
     if isinstance(response, FinalPlanAssembly):
-        _validate_plan_draft(response.draft)
+        _validate_plan_draft(response.draft, evidence_ids=evidence_ids)
         _validate_unique_ids(
             [item.critique_id for item in response.critique_dispositions],
             "critique disposition",
@@ -170,7 +178,11 @@ def _validate_plan_response(response: BaseModel) -> None:
     raise ValueError("unsupported structured Plan response")
 
 
-def _validate_plan_draft(response: PlanDraft) -> None:
+def _validate_plan_draft(
+    response: PlanDraft,
+    *,
+    evidence_ids: set[str] | None = None,
+) -> None:
     if len(response.title.strip()) < 4 or len(response.objective.strip()) < 12:
         raise ValueError("plan requires a substantive title and objective")
     if not response.tasks:
@@ -201,6 +213,20 @@ def _validate_plan_draft(response: PlanDraft) -> None:
     )
     if unsafe_paths:
         raise ValueError("plan contains unsafe affected paths: " + ", ".join(unsafe_paths))
+    if evidence_ids is not None:
+        unknown_evidence = sorted(
+            {
+                evidence_id
+                for task in response.tasks
+                for evidence_id in task.evidence_ids
+                if evidence_id not in evidence_ids
+            }
+        )
+        if unknown_evidence:
+            raise ValueError(
+                "plan tasks reference unknown workspace evidence: "
+                + ", ".join(unknown_evidence)
+            )
 
 
 def _validate_unique_ids(values: list[str], label: str) -> None:
@@ -324,12 +350,14 @@ def _build_plan_prompt(
         )
     elif correction:
         correction_text = f"\nPrevious response validation error: {correction}\n"
-    tool_instruction = (
-        "Read and search only the minimum relevant workspace files. Do not use web, shell, "
-        "writes, plugins, MCP, or delegation."
-        if request.tool_policy.read
-        else "Use only the supplied context and no tools."
-    )
+    if phase is PlanPhase.INDEPENDENT and request.tool_policy.read:
+        tool_instruction = (
+            "The prebuilt workspace context is incomplete. Read and search only the minimum "
+            "additional workspace files needed. Do not use web, shell, writes, plugins, MCP, "
+            "or delegation."
+        )
+    else:
+        tool_instruction = "Use only the supplied context and no tools."
     context: dict[str, object] | str = "Omitted on correction."
     instructions = _plan_stage_instructions(phase)
     if previous_response is None:
@@ -339,6 +367,11 @@ def _build_plan_prompt(
                 include_evidence=phase is PlanPhase.INDEPENDENT,
             )
         }
+        if request.workspace_context is not None:
+            context["workspace_context"] = _workspace_context_payload(
+                request,
+                include_content=phase is PlanPhase.INDEPENDENT,
+            )
         if phase is PlanPhase.JOINT_DRAFT:
             context["candidate_plans"] = _candidate_plans(request.plan_candidates)
         elif phase is PlanPhase.AUTHOR_AUDIT:
@@ -396,7 +429,8 @@ def _plan_stage_instructions(phase: PlanPhase) -> str:
         return (
             "Create an independent implementation plan. Inspect only the minimum workspace "
             "surface needed. Do not imitate an assumed peer plan. Give every task a short, "
-            "stable id."
+            "stable id. Reference only supplied CTX evidence ids in evidence_ids; record "
+            "material context gaps as open questions."
         )
     if phase is PlanPhase.JOINT_DRAFT:
         return (
@@ -466,6 +500,30 @@ def _compact_plan_sources(
             )
         sources.append(source)
     return sources
+
+
+def _workspace_context_payload(
+    request: TurnRequest,
+    *,
+    include_content: bool,
+) -> dict[str, object]:
+    context = request.workspace_context
+    if context is None:
+        return {}
+    manifest = context.manifest.model_dump(
+        mode="json",
+        exclude={"evidence"} if include_content else None,
+    )
+    value: dict[str, object] = {
+        "manifest": manifest,
+        "project_map": context.project_map,
+    }
+    if include_content:
+        value["evidence"] = [
+            item.model_dump(mode="json")
+            for item in context.evidence
+        ]
+    return value
 
 
 def _candidate_plans(candidates: dict[str, PlanDraft]) -> dict[str, object]:

@@ -28,6 +28,10 @@ from ego.models import (
     RunStatus,
     ToolPolicy,
     TurnRequest,
+    WorkspaceContext,
+    WorkspaceContextEvidence,
+    WorkspaceContextEvidenceReference,
+    WorkspaceContextManifest,
 )
 from ego.planning import PlanArtifactError, PlanArtifactWriter, PlanInput, PlanWorkflow
 from ego.planning.assembly import (
@@ -35,7 +39,8 @@ from ego.planning.assembly import (
     normalize_final_assembly,
     normalize_joint_draft,
 )
-from ego.prompts import build_prompt
+from ego.planning.context import WorkspaceContextBuilder
+from ego.prompts import build_prompt, validate_response
 from ego.storage import Database
 
 
@@ -56,7 +61,8 @@ class PlanParticipant:
     async def respond(self, request: TurnRequest) -> ParticipantTurnResult:
         self.requests.append(request)
         if request.phase is PlanPhase.INDEPENDENT:
-            assert request.tool_policy.read
+            assert request.workspace_context is not None
+            assert request.tool_policy.read is not request.workspace_context.manifest.sufficient
             assert request.plan_sources
             payload: PlanDraft | JointPlanDraft | PlanAudit | FinalPlanAssembly = (
                 self._draft(f"Independent contribution from {self.participant_id}.")
@@ -185,6 +191,11 @@ def accepted_decision(database: Database, workspace: Path) -> str:
     return decision_id
 
 
+class FailingContextBuilder(WorkspaceContextBuilder):
+    async def build(self, **_: object) -> WorkspaceContext:
+        raise OSError("synthetic context failure")
+
+
 @pytest.mark.asyncio
 async def test_plan_collaborates_without_final_assembly_when_audits_are_clear(
     database: Database,
@@ -221,9 +232,10 @@ async def test_plan_collaborates_without_final_assembly_when_audits_are_clear(
     sources = json.loads((artifact / "sources.json").read_text(encoding="utf-8"))
     assert sources[0]["conclusion"] == "Create bounded Markdown plan artifacts."
     manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["artifact_version"] == 3
+    assert manifest["artifact_version"] == 4
     assert manifest["participants"] == sorted(participants)
     assert manifest["blocking_issues"] == []
+    assert manifest["workspace_context"]["context_id"]
     assert database.get_plan(outcome.plan.plan_id)["state"] == "draft"
     calls = database.get_run(outcome.plan.run_id)["calls"]
     assert len(calls) == 7
@@ -293,6 +305,100 @@ async def test_plan_accepts_direct_text_without_a_decision(
     sources = json.loads((artifact / "sources.json").read_text(encoding="utf-8"))
     assert sources[0]["instruction"] == instruction
     assert database.get_plan(outcome.plan.plan_id)["decision_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_plan_shares_one_context_and_disables_redundant_workspace_reads(
+    database: Database,
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    relevant = source_dir / "csv_export.py"
+    relevant.write_text(
+        "def export_csv(records):\n    return records\n",
+        encoding="utf-8",
+    )
+    participants = plan_participants("codex", "claude")
+
+    outcome = await PlanWorkflow(database, participants).plan(
+        PlanInput(
+            question="Create a plan for the CSV export.",
+            workspace=tmp_path,
+            participant_ids=list(participants),
+            command="plan",
+            brief="Add a CSV export.",
+        )
+    )
+
+    independent = [
+        request
+        for participant in participants.values()
+        for request in participant.requests
+        if request.phase is PlanPhase.INDEPENDENT
+    ]
+    assert len(independent) == 2
+    assert all(request.workspace_context is not None for request in independent)
+    context_ids = {
+        request.workspace_context.manifest.context_id
+        for request in independent
+        if request.workspace_context is not None
+    }
+    assert len(context_ids) == 1
+    assert all(not request.tool_policy.read for request in independent)
+    joint = next(
+        request
+        for participant in participants.values()
+        for request in participant.requests
+        if request.phase is PlanPhase.JOINT_DRAFT
+    )
+    assert joint.workspace_context is not None
+    assert joint.workspace_context.manifest.context_id in context_ids
+    assert "def export_csv" in build_prompt(independent[0])
+    assert "def export_csv" not in build_prompt(joint)
+    assert outcome.plan.workspace_context_manifest is not None
+    stored = database.get_plan(outcome.plan.plan_id)["plan"]
+    assert (
+        stored["workspace_context_manifest"]["context_id"]
+        == outcome.plan.workspace_context_manifest.context_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_keeps_protected_reads_when_context_construction_fails(
+    database: Database,
+    tmp_path: Path,
+) -> None:
+    participants = plan_participants("codex", "claude")
+
+    outcome = await PlanWorkflow(
+        database,
+        participants,
+        context_builder=FailingContextBuilder(),
+    ).plan(
+        PlanInput(
+            question="Create a fallback plan.",
+            workspace=tmp_path,
+            participant_ids=list(participants),
+            command="plan",
+            brief="Add fallback behavior.",
+        )
+    )
+
+    independent = [
+        request
+        for participant in participants.values()
+        for request in participant.requests
+        if request.phase is PlanPhase.INDEPENDENT
+    ]
+    assert all(request.tool_policy.read for request in independent)
+    assert outcome.plan.workspace_context_manifest is not None
+    assert not outcome.plan.workspace_context_manifest.sufficient
+    assert (
+        outcome.plan.workspace_context_manifest.fallback_reason
+        == "context builder failed (OSError)"
+    )
+    assert any("protected workspace reads" in item for item in outcome.plan.warnings)
 
 
 @pytest.mark.asyncio
@@ -461,6 +567,55 @@ def test_plan_correction_prompt_does_not_repeat_decision_context(
 
     assert "Omitted on correction." in prompt
     assert package.conclusion not in prompt
+
+
+def test_plan_rejects_unknown_workspace_evidence_ids(tmp_path: Path) -> None:
+    evidence = WorkspaceContextEvidence(
+        id="CTX-known",
+        path="src/export.py",
+        line_start=1,
+        line_end=1,
+        file_sha256="a" * 64,
+        fragment_sha256="b" * 64,
+        reason="query-relevant workspace evidence",
+        content="def export_csv(): ...\n",
+    )
+    context = WorkspaceContext(
+        manifest=WorkspaceContextManifest(
+            context_id="context-1",
+            workspace_fingerprint="c" * 64,
+            evidence=[
+                WorkspaceContextEvidenceReference(
+                    id=evidence.id,
+                    path=evidence.path,
+                    line_start=evidence.line_start,
+                    line_end=evidence.line_end,
+                    file_sha256=evidence.file_sha256,
+                    fragment_sha256=evidence.fragment_sha256,
+                    reason=evidence.reason,
+                )
+            ],
+            sufficient=True,
+            bytes_used=len(evidence.content),
+            byte_budget=1024,
+        ),
+        project_map=[evidence.path],
+        evidence=[evidence],
+    )
+    request = TurnRequest(
+        run_id="run-1",
+        phase=PlanPhase.INDEPENDENT,
+        question="Plan the CSV export.",
+        workspace=tmp_path,
+        agent_id="plan",
+        workflow_id="plan",
+        workspace_context=context,
+    )
+    draft = PlanParticipant._draft("Add the CSV export.")
+    draft.tasks[0].evidence_ids = ["CTX-unknown"]
+
+    with pytest.raises(ValueError, match="unknown workspace evidence"):
+        validate_response(request, draft)
 
 
 @pytest.mark.asyncio

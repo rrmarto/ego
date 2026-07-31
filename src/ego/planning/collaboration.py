@@ -11,6 +11,7 @@ from ego.models import (
     PlanSource,
     ToolPolicy,
     TurnRequest,
+    WorkspaceContext,
 )
 from ego.participants import Participant
 from ego.planning.assembly import qualify_audit
@@ -27,8 +28,14 @@ class PlanCollaboration:
         run_id: str,
         request: AgentInput,
         sources: list[PlanSource],
+        workspace_context: WorkspaceContext,
         active: dict[str, Participant],
     ) -> dict[str, PlanDraft]:
+        tools = (
+            ToolPolicy()
+            if workspace_context.manifest.sufficient
+            else ToolPolicy.local_read_only()
+        )
         results = await self.runtime.parallel(
             run_id,
             PlanPhase.INDEPENDENT,
@@ -40,7 +47,8 @@ class PlanCollaboration:
                         request,
                         sources,
                         PlanPhase.INDEPENDENT,
-                        tools=ToolPolicy.local_read_only(),
+                        tools=tools,
+                        workspace_context=workspace_context,
                     ),
                 )
                 for participant_id, participant in active.items()
@@ -57,6 +65,7 @@ class PlanCollaboration:
         run_id: str,
         request: AgentInput,
         sources: list[PlanSource],
+        workspace_context: WorkspaceContext,
         candidates: dict[str, PlanDraft],
         participant_id: str,
         participant: Participant,
@@ -72,6 +81,7 @@ class PlanCollaboration:
                         request,
                         sources,
                         PlanPhase.JOINT_DRAFT,
+                        workspace_context=workspace_context,
                         plan_candidates=candidates,
                     ),
                 )
@@ -87,6 +97,7 @@ class PlanCollaboration:
         run_id: str,
         request: AgentInput,
         sources: list[PlanSource],
+        workspace_context: WorkspaceContext,
         candidates: dict[str, PlanDraft],
         joint: JointPlanDraft,
         active: dict[str, Participant],
@@ -102,6 +113,7 @@ class PlanCollaboration:
                         request,
                         sources,
                         PlanPhase.AUTHOR_AUDIT,
+                        workspace_context=workspace_context,
                         plan_author_id=participant_id,
                         own_plan=draft,
                         joint_plan=joint,
@@ -122,6 +134,7 @@ class PlanCollaboration:
         run_id: str,
         request: AgentInput,
         sources: list[PlanSource],
+        workspace_context: WorkspaceContext,
         joint: JointPlanDraft,
         audits: dict[str, PlanAudit],
         participant_id: str,
@@ -138,6 +151,7 @@ class PlanCollaboration:
                         request,
                         sources,
                         PlanPhase.FINAL_ASSEMBLY,
+                        workspace_context=workspace_context,
                         joint_plan=joint,
                         plan_audits=audits,
                     ),
@@ -159,6 +173,7 @@ class PlanCollaboration:
         phase: PlanPhase,
         *,
         tools: ToolPolicy | None = None,
+        workspace_context: WorkspaceContext | None = None,
         plan_candidates: dict[str, PlanDraft] | None = None,
         plan_author_id: str | None = None,
         own_plan: PlanDraft | None = None,
@@ -174,6 +189,7 @@ class PlanCollaboration:
             workflow_id="plan",
             tool_policy=tools or ToolPolicy(),
             plan_sources=sources,
+            workspace_context=workspace_context,
             plan_candidates=plan_candidates or {},
             plan_author_id=plan_author_id,
             own_plan=own_plan,

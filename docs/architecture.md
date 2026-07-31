@@ -211,12 +211,15 @@ Ego resolves Decision identifiers in SQLite and snapshots every source before
 the participant runs; models never query storage or invent source identifiers.
 
 Planning requires at least two available participants. Without an explicit
-selection it uses every configured participant. Each participant first creates
-an independent plan with narrow local read/search. A rotating author then
-creates one joint candidate from the normalized plans with no tools. Every
-original author audits that candidate in parallel against its own plan and the
-frozen sources. If any audit contains criticism, a different rotating
-participant performs one final assembly.
+selection it uses every configured participant. Before provider calls, Ego
+builds one deterministic, bounded `WorkspaceContext` in memory from applicable
+project instructions, a compact path map, and query-relevant evidence
+fragments. Every participant receives that same snapshot. Each participant
+first creates an independent plan; a rotating author then creates one joint
+candidate from the normalized plans with no tools. Every original author audits
+that candidate in parallel against its own plan and the frozen sources. If any
+audit contains criticism, a different rotating participant performs one final
+assembly.
 
 The joint candidate maps every qualified source task to an incorporated,
 merged, omitted, variant, or unmapped disposition. Audits and final dispositions
@@ -226,11 +229,14 @@ that is not explicitly applied, an unmapped contribution, a missing audit, or a
 variant becomes a blocking issue. Blocking plans remain inspectable but cannot
 be approved. There is no voting or automatic retry loop.
 
-Only independent planning may inspect the workspace. Later stages receive
-compact structured sources and prior planning records with tools disabled.
-Each invalid structured response retains one corrective call; that correction
-receives only the prior response and validation error rather than repeating
-the full planning context.
+The full `WorkspaceContext` is sent only to independent planning. Later stages
+receive its manifest and project map with compact structured sources and prior
+planning records. When the snapshot is sufficient, every provider call has
+tools disabled. If mandatory instructions, the catalog, or relevant evidence
+cannot fit deterministic bounds—or context construction fails—only independent
+planning retains protected local read/search as a fallback. Each invalid
+structured response retains one corrective call; that correction receives only
+the prior response and validation error rather than repeating the full context.
 
 The participant returns a canonical `PlanDraft`; it cannot write. Ego's
 deterministic writer renders `plan.md`, `sources.json`, and `manifest.json`
@@ -239,8 +245,11 @@ traversal, symlinks, existing targets, and unexpected files. Plans start as
 `draft`; approval, rejection, and supersession are append-only human actions.
 Independent plans, the joint candidate, audits, and final dispositions remain
 in the typed persisted result. The portable artifact exposes the final plan,
-source snapshots, participants, variants, and blockers without asking a Builder
-to reconcile model discussion. Ego never executes an approved plan.
+source snapshots, participants, variants, blockers, and the context manifest
+without asking a Builder to reconcile model discussion. Context contents exist
+only for the run; Ego persists hashes, paths, line ranges, bounds, omissions,
+and fallback state, but creates no context cache or cleanup obligation. Ego
+never executes an approved plan.
 
 ## Safety invariant
 

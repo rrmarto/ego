@@ -344,14 +344,20 @@ ego plan --file docs/export-plan.md --dir .
 ego plans approve <plan-id>
 ```
 
-Plan resolves and snapshots the explicit source, creates independent plans,
-builds a rotating joint candidate, and lets every original author audit it.
-Final assembly runs only when criticism exists. Ego writes `plan.md`,
-`sources.json`, and `manifest.json` below
-`.ego/plans/`. The participant remains read-only; a deterministic writer owns
-that narrow artifact path. Approval records readiness for an external Builder
-but never implements the plan. Unmapped contributions, missing audits,
-unapplied material criticism, and variants block approval.
+Plan resolves and snapshots the explicit source, then builds one bounded
+workspace context in memory for all participants. Independent plans receive
+the evidence contents once; later stages receive only its manifest and project
+map. If that context is insufficient, independent participants retain protected
+read/search as a fallback. Ego creates no context cache: only evidence hashes,
+paths, bounds, and fallback metadata survive in the plan.
+
+Plan then builds a rotating joint candidate and lets every original author
+audit it. Final assembly runs only when criticism exists. Ego writes `plan.md`,
+`sources.json`, and `manifest.json` below `.ego/plans/`. The participant remains
+read-only; a deterministic writer owns that narrow artifact path. Approval
+records readiness for an external Builder but never implements the plan.
+Unmapped contributions, missing audits, unapplied material criticism, and
+variants block approval.
 
 ## Architecture
 
